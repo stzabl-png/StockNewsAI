@@ -191,6 +191,27 @@ class NewsAnalyzer:
             self.session.add(analysis)
             await self.session.commit()
             await self.session.refresh(analysis)
+
+            # ---- 高影响事件推送微信 ----
+            if analysis.impact_level == "high":
+                try:
+                    from app.services.notifier import notify_high_impact
+                    await notify_high_impact({
+                        "ticker": company.ticker,
+                        "company_name": company.name,
+                        "news_title": news.title,
+                        "sentiment": analysis.sentiment,
+                        "confidence": analysis.confidence,
+                        "impact_level": analysis.impact_level,
+                        "impact_duration": analysis.impact_duration,
+                        "summary_cn": analysis.summary_cn,
+                        "detailed_analysis": analysis.detailed_analysis,
+                        "related_tickers": analysis.related_tickers,
+                        "key_dates": analysis.key_dates,
+                    })
+                except Exception as e:
+                    logger.warning(f"微信推送失败（不影响分析）: {e}")
+
             return analysis
 
         except Exception as e:

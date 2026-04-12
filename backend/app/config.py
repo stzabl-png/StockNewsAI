@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"        # Level 1 初筛（便宜）
     OPENAI_MODEL_L2: str = "gpt-4o"          # Level 2 深度分析（更强）
 
+    # ---------- 微信推送 ----------
+    WECHAT_SENDKEY: str = ""
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

@@ -1,10 +1,8 @@
-/* =====================================================
-   StockNewsAI — Dashboard JavaScript
-   ===================================================== */
+// =====================================================
+//  Mock Mode Detection & API Client
+// =====================================================
+let isMockMode = false;
 
-// =====================================================
-//  API Client
-// =====================================================
 const API = {
     base: '',
 
@@ -26,20 +24,38 @@ const API = {
     },
 
     // Health
-    getHealth() { return this.request('/api/health'); },
+    getHealth() {
+        if (isMockMode) return Promise.resolve(MOCK_DATA.health);
+        return this.request('/api/health');
+    },
 
     // News
     getNews(params = {}) {
+        if (isMockMode) {
+            let data = MOCK_DATA.news;
+            if (params.ticker) data = data.filter(n => n.ticker === params.ticker);
+            return Promise.resolve(data);
+        }
         const q = new URLSearchParams();
         if (params.ticker) q.set('ticker', params.ticker);
         if (params.source) q.set('source', params.source);
         q.set('limit', params.limit || 50);
         return this.request(`/api/news?${q}`);
     },
-    getNewsStats() { return this.request('/api/news/stats'); },
+    getNewsStats() {
+        if (isMockMode) return Promise.resolve(MOCK_DATA.newsStats);
+        return this.request('/api/news/stats');
+    },
 
     // Analysis
     getAnalysis(params = {}) {
+        if (isMockMode) {
+            let data = MOCK_DATA.analysis;
+            if (params.ticker) data = data.filter(a => a.ticker === params.ticker);
+            if (params.sentiment) data = data.filter(a => a.sentiment === params.sentiment);
+            if (params.impact_level) data = data.filter(a => a.impact_level === params.impact_level);
+            return Promise.resolve(data);
+        }
         const q = new URLSearchParams();
         if (params.ticker) q.set('ticker', params.ticker);
         if (params.sentiment) q.set('sentiment', params.sentiment);
@@ -47,17 +63,26 @@ const API = {
         q.set('limit', params.limit || 50);
         return this.request(`/api/analysis?${q}`);
     },
-    getAnalysisStats() { return this.request('/api/analysis/stats'); },
+    getAnalysisStats() {
+        if (isMockMode) return Promise.resolve(MOCK_DATA.analysisStats);
+        return this.request('/api/analysis/stats');
+    },
     analyzeNews(newsId) { return this.request(`/api/analysis/${newsId}`, { method: 'POST' }); },
     analyzeBatch(sync = true) { return this.request(`/api/analysis/batch?sync=${sync}`, { method: 'POST' }); },
 
     // Watchlist
-    getWatchlist() { return this.request('/api/watchlist?active_only=false'); },
+    getWatchlist() {
+        if (isMockMode) return Promise.resolve(MOCK_DATA.watchlist);
+        return this.request('/api/watchlist?active_only=false');
+    },
     addCompany(data) { return this.request('/api/watchlist', { method: 'POST', body: JSON.stringify(data) }); },
     deleteCompany(ticker) { return this.request(`/api/watchlist/${ticker}`, { method: 'DELETE' }); },
 
     // Scheduler
-    getJobs() { return this.request('/api/scheduler/jobs'); },
+    getJobs() {
+        if (isMockMode) return Promise.resolve(MOCK_DATA.schedulerJobs);
+        return this.request('/api/scheduler/jobs');
+    },
     triggerJob(jobId) { return this.request(`/api/scheduler/jobs/${jobId}/trigger`, { method: 'POST' }); },
     pauseJob(jobId) { return this.request(`/api/scheduler/jobs/${jobId}/pause`, { method: 'POST' }); },
     resumeJob(jobId) { return this.request(`/api/scheduler/jobs/${jobId}/resume`, { method: 'POST' }); },
@@ -594,7 +619,7 @@ function showToast(msg, type = 'info') {
 // =====================================================
 //  Init
 // =====================================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Nav click handlers
     document.querySelectorAll('.nav-item').forEach(el => {
         el.addEventListener('click', (e) => {
@@ -603,11 +628,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Auto-detect: try API, fall back to mock data
+    try {
+        await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+        isMockMode = false;
+    } catch {
+        isMockMode = true;
+        console.log('🔶 Backend unreachable, using mock data');
+        // Update live indicator
+        const liveDot = document.querySelector('.live-dot');
+        if (liveDot) liveDot.style.background = '#f59e0b';
+        const liveText = document.querySelector('.live-indicator span:last-child');
+        if (liveText) liveText.textContent = 'Mock 模式';
+    }
+
     // Load initial page
     navigateTo('dashboard');
 
-    // Auto-refresh every 5 minutes
+    if (isMockMode) {
+        showToast('📋 Mock 模式 — 使用示例数据预览', 'info');
+    }
+
+    // Auto-refresh every 5 minutes (only in live mode)
     setInterval(() => {
-        if (currentPage === 'dashboard') loadDashboard();
+        if (!isMockMode && currentPage === 'dashboard') loadDashboard();
     }, 5 * 60 * 1000);
 });

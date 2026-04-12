@@ -59,11 +59,13 @@ from app.api.watchlist import router as watchlist_router
 from app.api.news import router as news_router
 from app.api.analysis import router as analysis_router
 from app.api.scheduler import router as scheduler_router
+from app.api.notify import router as notify_router
 
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
+app.include_router(notify_router, prefix="/api")
 
 # ---- 前端静态文件 ----
 import os

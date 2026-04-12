@@ -15,14 +15,28 @@ StockNews/
 
 ## 🚀 快速启动
 
-### 前置条件
-- 安装 [Docker](https://docs.docker.com/get-docker/)
-- 安装 [Docker Compose](https://docs.docker.com/compose/install/)
-
-### 启动项目
+### ⭐ 前端开发（最简方式，不需要 Docker）
 ```bash
-git clone <仓库地址>
-cd StockNews
+git clone git@github.com:stzabl-png/StockNewsAI.git
+cd StockNewsAI/frontend
+
+# 用 VS Code 打开（推荐）
+code .
+
+# 启动本地预览（任选一种）
+# 方式1: VS Code 安装 Live Server 插件，右键 index.html → Open with Live Server
+# 方式2: Python 简易服务器
+python3 -m http.server 3000
+# 然后打开 http://localhost:3000
+```
+
+> ✅ 页面会自动检测后端不可用，并使用 **Mock 示例数据** 展示完整界面。
+> 左下角会显示 "Mock 模式" 黄色指示灯。
+
+### 完整启动（含后端，需要 Docker）
+```bash
+git clone git@github.com:stzabl-png/StockNewsAI.git
+cd StockNewsAI
 
 # 复制配置模板
 cp .env.example .env
