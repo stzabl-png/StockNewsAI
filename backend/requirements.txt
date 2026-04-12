@@ -1,0 +1,28 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+
+# Configuration
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Redis
+redis[hiredis]==5.2.1
+
+# HTTP client
+httpx==0.28.1
+
+# Utilities
+python-dateutil==2.9.0
+
+# LLM APIs
+openai>=1.58.0
+
+# Scheduler
+apscheduler>=3.10.4
+tzdata

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NewsAnalysisForStock — 美股生物医药新闻智能分析</title>
+    <meta name="description" content="7×24小时美股生物医药新闻智能分析系统">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- ===== 侧边栏 ===== -->
+        <aside id="sidebar">
+            <div class="sidebar-logo">
+                <span class="logo-icon">🧬</span>
+                <span class="logo-text">StockNews<span class="logo-ai">AI</span></span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-label">概览</span>
+                </a>
+                <a href="#" class="nav-item" data-page="news">
+                    <span class="nav-icon">📰</span>
+                    <span class="nav-label">新闻流</span>
+                </a>
+                <a href="#" class="nav-item" data-page="analysis">
+                    <span class="nav-icon">🔍</span>
+                    <span class="nav-label">AI 分析</span>
+                </a>
+                <a href="#" class="nav-item" data-page="watchlist">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-label">关注列表</span>
+                </a>
+                <a href="#" class="nav-item" data-page="system">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">系统</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="live-indicator">
+                    <span class="live-dot"></span>
+                    <span>系统运行中</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ===== 主内容区 ===== -->
+        <main id="main-content">
+            <!-- 顶栏 -->
+            <header id="topbar">
+                <h1 id="page-title">概览</h1>
+                <div class="topbar-actions">
+                    <button id="btn-refresh" class="btn btn-ghost" onclick="refreshCurrentPage()">
+                        🔄 刷新
+                    </button>
+                    <button id="btn-fetch" class="btn btn-primary" onclick="triggerFetch()">
+                        ⚡ 立即采集
+                    </button>
+                </div>
+            </header>
+
+            <!-- ===== Dashboard 概览 ===== -->
+            <section id="page-dashboard" class="page active">
+                <div class="stats-grid">
+                    <div class="stat-card" id="stat-total">
+                        <div class="stat-icon">📰</div>
+                        <div class="stat-value">—</div>
+                        <div class="stat-label">新闻总数</div>
+                    </div>
+                    <div class="stat-card stat-bullish" id="stat-bullish">
+                        <div class="stat-icon">🟢</div>
+                        <div class="stat-value">—</div>
+                        <div class="stat-label">利好信号</div>
+                    </div>
+                    <div class="stat-card stat-bearish" id="stat-bearish">
+                        <div class="stat-icon">🔴</div>
+                        <div class="stat-value">—</div>
+                        <div class="stat-label">利空信号</div>
+                    </div>
+                    <div class="stat-card stat-high" id="stat-high">
+                        <div class="stat-icon">⚡</div>
+                        <div class="stat-value">—</div>
+                        <div class="stat-label">高影响事件</div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card" id="card-high-impact">
+                        <div class="card-header">
+                            <h2>🔥 高影响事件</h2>
+                            <span class="badge badge-warning">需关注</span>
+                        </div>
+                        <div class="card-body" id="high-impact-list">
+                            <div class="loading-placeholder">加载中...</div>
+                        </div>
+                    </div>
+                    <div class="card" id="card-recent">
+                        <div class="card-header">
+                            <h2>📰 最新新闻</h2>
+                        </div>
+                        <div class="card-body" id="recent-news-list">
+                            <div class="loading-placeholder">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== 新闻流 ===== -->
+            <section id="page-news" class="page">
+                <div class="filter-bar">
+                    <select id="news-filter-ticker" class="filter-select" onchange="loadNews()">
+                        <option value="">全部公司</option>
+                    </select>
+                    <select id="news-filter-source" class="filter-select" onchange="loadNews()">
+                        <option value="">全部来源</option>
+                        <option value="finnhub">Finnhub</option>
+                    </select>
+                    <button class="btn btn-ghost" onclick="loadNews()">🔍 筛选</button>
+                </div>
+                <div id="news-list" class="news-list">
+                    <div class="loading-placeholder">加载中...</div>
+                </div>
+            </section>
+
+            <!-- ===== AI 分析 ===== -->
+            <section id="page-analysis" class="page">
+                <div class="filter-bar">
+                    <select id="analysis-filter-ticker" class="filter-select" onchange="loadAnalysis()">
+                        <option value="">全部公司</option>
+                    </select>
+                    <select id="analysis-filter-sentiment" class="filter-select" onchange="loadAnalysis()">
+                        <option value="">全部情感</option>
+                        <option value="bullish">🟢 利好</option>
+                        <option value="bearish">🔴 利空</option>
+                        <option value="neutral">⚪ 中性</option>
+                    </select>
+                    <select id="analysis-filter-impact" class="filter-select" onchange="loadAnalysis()">
+                        <option value="">全部影响</option>
+                        <option value="high">⚡ 高影响</option>
+                        <option value="medium">🔶 中影响</option>
+                        <option value="low">▫️ 低影响</option>
+                    </select>
+                </div>
+                <div id="analysis-list" class="analysis-list">
+                    <div class="loading-placeholder">加载中...</div>
+                </div>
+            </section>
+
+            <!-- ===== 关注列表 ===== -->
+            <section id="page-watchlist" class="page">
+                <div class="card add-company-card">
+                    <h2>➕ 添加公司</h2>
+                    <form id="add-company-form" onsubmit="addCompany(event)">
+                        <div class="form-row">
+                            <input type="text" id="input-ticker" class="form-input" placeholder="股票代码 (如 MRNA)" required>
+                            <input type="text" id="input-name" class="form-input" placeholder="公司名称 (如 Moderna)" required>
+                            <select id="input-priority" class="filter-select">
+                                <option value="medium">中优先级</option>
+                                <option value="high">高优先级</option>
+                            </select>
+                            <button type="submit" class="btn btn-primary">添加</button>
+                        </div>
+                    </form>
+                </div>
+                <div id="watchlist-grid" class="watchlist-grid">
+                    <div class="loading-placeholder">加载中...</div>
+                </div>
+            </section>
+
+            <!-- ===== 系统状态 ===== -->
+            <section id="page-system" class="page">
+                <div class="system-grid">
+                    <div class="card" id="card-health">
+                        <div class="card-header"><h2>❤️ 系统健康</h2></div>
+                        <div class="card-body" id="health-info">
+                            <div class="loading-placeholder">加载中...</div>
+                        </div>
+                    </div>
+                    <div class="card" id="card-scheduler">
+                        <div class="card-header">
+                            <h2>⏰ 定时任务</h2>
+                        </div>
+                        <div class="card-body" id="scheduler-info">
+                            <div class="loading-placeholder">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div id="toast-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
