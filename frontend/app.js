@@ -118,9 +118,6 @@ function navigateTo(page) {
         el.classList.toggle('active', el.id === `page-${page}`);
     });
 
-    // Update title
-    document.getElementById('page-title').textContent = PAGE_TITLES[page] || page;
-
     // Load page data
     loadPageData(page);
 }
@@ -128,7 +125,8 @@ function navigateTo(page) {
 function loadPageData(page) {
     switch (page) {
         case 'dashboard': loadDashboard(); break;
-        case 'news': loadNews(); break;
+        case 'latest': loadLatest(); break;
+        case 'categories': loadCategories(); break;
         case 'analysis': loadAnalysis(); break;
         case 'watchlist': loadWatchlist(); break;
         case 'system': loadSystem(); break;
@@ -145,111 +143,100 @@ function refreshCurrentPage() {
 //  Dashboard
 // =====================================================
 async function loadDashboard() {
+    const container = document.getElementById('home-feed-list');
+    if (!container) return;
     try {
-        const [newsStats, analysisStats, news, analyses] = await Promise.all([
-            API.getNewsStats(),
-            API.getAnalysisStats().catch(() => ({ total: 0, high_impact: 0, by_sentiment: {}, by_impact: {} })),
-            API.getNews({ limit: 8 }),
-            API.getAnalysis({ impact_level: 'high', limit: 5 }),
-        ]);
-
-        // Stats cards
-        setStatValue('stat-total', newsStats.total || 0);
-        setStatValue('stat-bullish', analysisStats.by_sentiment?.bullish || 0);
-        setStatValue('stat-bearish', analysisStats.by_sentiment?.bearish || 0);
-        setStatValue('stat-high', analysisStats.high_impact || 0);
-
-        // High impact events
-        const highImpactEl = document.getElementById('high-impact-list');
+        const analyses = await API.getAnalysis({ limit: 50 });
+        
         if (analyses.length === 0) {
-            highImpactEl.innerHTML = emptyState('🛡️', '暂无高影响事件');
-        } else {
-            highImpactEl.innerHTML = analyses.map(a => `
-                <div class="news-item" style="padding: 12px 0; border: none; background: none;">
-                    <div class="news-sentiment ${a.sentiment}">
-                        ${sentimentIcon(a.sentiment)}
-                    </div>
-                    <div class="news-content">
-                        <div class="news-title">${escHtml(a.news_title)}</div>
-                        <div class="news-meta">
-                            <span class="news-ticker">${a.ticker}</span>
-                            <span>${a.company_name}</span>
-                            <span class="badge badge-${a.sentiment}">${sentimentLabel(a.sentiment)}</span>
-                            <span>置信度 ${(a.confidence * 100).toFixed(0)}%</span>
-                        </div>
-                        ${a.summary_cn ? `<div class="news-summary">${escHtml(a.summary_cn)}</div>` : ''}
-                    </div>
-                </div>
-            `).join('');
-        }
-
-        // Recent news
-        const recentEl = document.getElementById('recent-news-list');
-        if (news.length === 0) {
-            recentEl.innerHTML = emptyState('📰', '暂无新闻，点击"立即采集"');
-        } else {
-            recentEl.innerHTML = news.slice(0, 6).map(n => `
-                <div class="news-item" style="padding: 10px 0; border: none; background: none;">
-                    <div class="news-content">
-                        <div class="news-title" style="font-size: 13px;">${escHtml(n.title)}</div>
-                        <div class="news-meta">
-                            <span class="news-ticker">${n.ticker}</span>
-                            <span>${timeAgo(n.published_at)}</span>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        }
-    } catch (e) {
-        showToast(`加载失败: ${e.message}`, 'error');
-    }
-}
-
-function setStatValue(id, value) {
-    const el = document.getElementById(id);
-    if (el) el.querySelector('.stat-value').textContent = value;
-}
-
-
-// =====================================================
-//  News Feed
-// =====================================================
-async function loadNews() {
-    const ticker = document.getElementById('news-filter-ticker').value;
-    const source = document.getElementById('news-filter-source').value;
-    const container = document.getElementById('news-list');
-
-    try {
-        const news = await API.getNews({ ticker, source, limit: 100 });
-        await populateTickerFilters();
-
-        if (news.length === 0) {
-            container.innerHTML = emptyState('📰', '暂无新闻');
+            container.innerHTML = emptyState('📋', '暂无最新新闻，请点击右上角 Fetch 刷新数据');
             return;
         }
 
-        container.innerHTML = news.map(n => `
-            <div class="news-item">
-                <div class="news-sentiment unknown">📄</div>
-                <div class="news-content">
-                    <div class="news-title">${escHtml(n.title)}</div>
-                    <div class="news-meta">
-                        <span class="news-ticker">${n.ticker}</span>
-                        <span>${n.company_name}</span>
-                        <span>•</span>
-                        <span>${n.source}</span>
-                        <span>•</span>
-                        <span>${timeAgo(n.published_at)}</span>
-                        ${n.source_url ? `<a href="${n.source_url}" target="_blank" style="color: var(--text-muted)">🔗</a>` : ''}
+        container.innerHTML = analyses.map((a, i) => `
+            <div class="analysis-item">
+                <div class="analysis-header" onclick="toggleDetail('home-${i}')">
+                    <div class="analysis-summary-row">
+                        <div class="news-sentiment ${a.sentiment}" style="width:32px;height:32px;font-size:16px;border-radius:8px;">
+                            ${sentimentIcon(a.sentiment)}
+                        </div>
+                        <span class="news-ticker" style="font-weight: 700;">${a.ticker}</span>
+                        <span class="analysis-title">${escHtml(a.news_title)}</span>
                     </div>
-                    ${n.summary ? `<div class="news-summary">${escHtml(n.summary)}</div>` : ''}
+                    <div class="analysis-badges">
+                        <span class="badge badge-${a.sentiment}">${sentimentLabel(a.sentiment)}</span>
+                        <span style="color:#ef4444; font-weight:600; font-size: 11px; margin-left: 8px;">${timeAgo(a.created_at)}</span>
+                    </div>
+                </div>
+                <div class="analysis-detail" id="detail-home-${i}">
+                    <div style="margin-bottom: 12px;">
+                        <strong>中文摘要:</strong>
+                        <p style="color: var(--text-secondary); margin-top: 4px;">${escHtml(a.summary_cn || '暂无摘要')}</p>
+                    </div>
+                    ${a.detailed_analysis ? renderDetailedAnalysis(a.detailed_analysis) : '<p style="color:var(--text-muted);font-size:12px;">无深度AI分析</p>'}
                 </div>
             </div>
         `).join('');
     } catch (e) {
         container.innerHTML = `<div class="empty-state"><p>加载失败: ${e.message}</p></div>`;
+        showToast(`首页加载失败: ${e.message}`, 'error');
     }
 }
+
+async function loadLatest() {
+    const listEl = document.getElementById('latest-news-list');
+    if (!listEl) return;
+    try {
+        const news = await API.getNews({ limit: 50 });
+        if (news.length === 0) {
+            listEl.innerHTML = emptyState('📰', '暂无最新新闻');
+            return;
+        }
+        listEl.innerHTML = news.map(n => `
+            <div class="news-item">
+                <div class="news-content">
+                    <div class="news-meta" style="margin-bottom: 6px;">
+                        <span class="news-ticker" style="font-size:14px; font-weight:700;">${n.ticker}</span>
+                        ${categoryHtml(n.category)}
+                        <span style="color:#ef4444; font-weight:600; margin-left: auto;">${timeAgo(n.published_at)}</span>
+                    </div>
+                    <div class="news-title" style="font-size:16px; margin-bottom: 8px;">${escHtml(n.title)}</div>
+                    <div class="news-meta">
+                        <span>📰 ${n.source}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    } catch(e) {
+        listEl.innerHTML = emptyState('❌', '加载最新消息失败: ' + e.message);
+    }
+}
+
+async function loadCategories() {
+    const gridEl = document.getElementById('category-grid');
+    if (!gridEl) return;
+    
+    // Placeholder categories UI
+    const cats = [
+        { id: 'biotech', icon: '🧬', label: '生物医疗', count: 34, color: '#dcfce7' },
+        { id: 'clinical', icon: '💉', label: '临床数据', count: 12, color: '#fee2e2' },
+        { id: 'fda', icon: '🏛️', label: 'FDA 动态', count: 8, color: '#dbeafe' },
+        { id: 'tech', icon: '💻', label: '科技前沿', count: 56, color: '#f3e8ff' },
+        { id: 'pharma', icon: '💊', label: '制药公司', count: 42, color: '#fef08a' }
+    ];
+
+    gridEl.innerHTML = cats.map(c => `
+        <div class="category-card" onclick="document.getElementById('global-search-input').value='${c.label}'; handleGlobalSearch(new Event('submit'));" style="border-left: 4px solid ${c.color}">
+            <div class="category-icon">${c.icon}</div>
+            <div class="category-info">
+                <h3>${c.label}</h3>
+                <span class="category-count">${c.count} 条相关</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+
 
 
 // =====================================================
@@ -332,11 +319,16 @@ function renderDetailedAnalysis(da) {
     if (!da) return '';
     return `
         <div class="detail-grid">
-            ${da.direct_impact ? `<div class="detail-block"><h4>📈 直接影响</h4><p>${escHtml(da.direct_impact)}</p></div>` : ''}
-            ${da.pipeline_impact ? `<div class="detail-block"><h4>🧪 管线影响</h4><p>${escHtml(da.pipeline_impact)}</p></div>` : ''}
-            ${da.competitive_landscape ? `<div class="detail-block"><h4>⚔️ 竞争格局</h4><p>${escHtml(da.competitive_landscape)}</p></div>` : ''}
-            ${da.revenue_impact ? `<div class="detail-block"><h4>💰 营收影响</h4><p>${escHtml(da.revenue_impact)}</p></div>` : ''}
+            ${da.expected_change ? `<div class="detail-block"><h4>📈 预期变化</h4><p style="color:var(--bullish); font-weight:600;">${escHtml(da.expected_change)}</p></div>` : ''}
+            ${da.potential_volatility ? `<div class="detail-block"><h4>📉 潜在波动</h4><p>${escHtml(da.potential_volatility)}</p></div>` : ''}
+            ${da.direct_impact ? `<div class="detail-block" style="grid-column: 1 / -1; margin-top:8px;"><h4>📊 核心影响</h4><p>${escHtml(da.direct_impact)}</p></div>` : ''}
         </div>
+        ${da.target_range ? `
+            <div class="detail-block-focus" style="margin-top: 12px;">
+                <h4>🎯 交易区间</h4>
+                <p>${escHtml(da.target_range)}</p>
+            </div>
+        ` : ''}
         ${da.risk_factors?.length ? `
             <div style="margin-top: 12px;">
                 <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">⚠️ 风险因素</span>
@@ -579,6 +571,18 @@ function sentimentLabel(s) {
     }
 }
 
+function categoryHtml(cat) {
+    if (!cat) return '';
+    switch(cat) {
+        case 'clinical_trial': return '<span class="badge badge-cat-clinical">🔬 临床数据</span>';
+        case 'fda_approval': return '<span class="badge badge-cat-fda">🏛️ FDA审批</span>';
+        case 'regulatory': return '<span class="badge badge-cat-regulatory">⚖️ 监管政策</span>';
+        case 'earnings': return '<span class="badge badge-cat-general">💰 财报</span>';
+        case 'breaking': return '<span class="badge badge-cat-breaking">⚡ 突发大新闻</span>';
+        default: return `<span class="badge badge-cat-general">📰 ${cat.toUpperCase()}</span>`;
+    }
+}
+
 function escHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -628,9 +632,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // Auto-detect: try API, fall back to mock data
     try {
-        await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+        const res = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+        if (!res.ok) throw new Error('Backend responded with error');
         isMockMode = false;
     } catch {
         isMockMode = true;
@@ -651,6 +655,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Auto-refresh every 5 minutes (only in live mode)
     setInterval(() => {
-        if (!isMockMode && currentPage === 'dashboard') loadDashboard();
+        if (!isMockMode) {
+            refreshCurrentPage();
+        }
     }, 5 * 60 * 1000);
 });
+
+// Global Search logic
+window.handleGlobalSearch = function(e) {
+    e.preventDefault();
+    const input = document.getElementById('global-search-input');
+    const ticker = input.value.trim().toUpperCase();
+    if (!ticker) return;
+
+    // Navigate to Trending (news)
+    navigateTo('news');
+    
+    // Set the filter and load
+    setTimeout(() => {
+        const filterSelect = document.getElementById('news-filter-ticker');
+        if (filterSelect) {
+            // Include option if missing
+            if (![...filterSelect.options].some(opt => opt.value === ticker)) {
+                filterSelect.insertAdjacentHTML('beforeend', `<option value="${ticker}">${ticker}</option>`);
+            }
+            filterSelect.value = ticker;
+            loadNews();
+            // Optional: reset input
+            input.value = '';
+        }
+    }, 100);
+};
+
+// Sidebar Toggle logic
+window.toggleSidebar = function() {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+        sidebar.classList.toggle('collapsed');
+    }
+};

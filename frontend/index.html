@@ -8,13 +8,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="/static/style.css" onerror="">
+    <link rel="stylesheet" href="./style.css">
 </head>
 <body>
     <div id="app">
-        <!-- ===== 侧边栏 ===== -->
-        <aside id="sidebar">
+        <!-- ===== 可折叠侧边栏 ===== -->
+        <aside id="sidebar" class="collapsible-sidebar">
             <div class="sidebar-logo">
                 <span class="logo-icon">🧬</span>
                 <span class="logo-text">StockNews<span class="logo-ai">AI</span></span>
@@ -22,108 +21,71 @@
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-page="dashboard">
                     <span class="nav-icon">📊</span>
-                    <span class="nav-label">概览</span>
+                    <span class="nav-label">Home</span>
                 </a>
-                <a href="#" class="nav-item" data-page="news">
-                    <span class="nav-icon">📰</span>
-                    <span class="nav-label">新闻流</span>
+                <a href="#" class="nav-item" data-page="latest">
+                    <span class="nav-icon">⚡</span>
+                    <span class="nav-label">最新消息</span>
                 </a>
-                <a href="#" class="nav-item" data-page="analysis">
-                    <span class="nav-icon">🔍</span>
-                    <span class="nav-label">AI 分析</span>
+                <a href="#" class="nav-item" data-page="categories">
+                    <span class="nav-icon">🏷️</span>
+                    <span class="nav-label">类别</span>
                 </a>
                 <a href="#" class="nav-item" data-page="watchlist">
                     <span class="nav-icon">📋</span>
-                    <span class="nav-label">关注列表</span>
-                </a>
-                <a href="#" class="nav-item" data-page="system">
-                    <span class="nav-icon">⚙️</span>
-                    <span class="nav-label">系统</span>
+                    <span class="nav-label">Watchlist</span>
                 </a>
             </nav>
-            <div class="sidebar-footer">
-                <div class="live-indicator">
-                    <span class="live-dot"></span>
-                    <span>系统运行中</span>
-                </div>
-            </div>
         </aside>
 
-        <!-- ===== 主内容区 ===== -->
-        <main id="main-content">
-            <!-- 顶栏 -->
-            <header id="topbar">
-                <h1 id="page-title">概览</h1>
-                <div class="topbar-actions">
-                    <button id="btn-refresh" class="btn btn-ghost" onclick="refreshCurrentPage()">
-                        🔄 刷新
+        <!-- ===== 主内容容器 ===== -->
+        <div id="main-wrapper">
+            <!-- ===== 全局顶部导航 ===== -->
+            <header id="top-header" class="glass-header">
+                <div class="header-left">
+                    <button id="sidebar-toggle" class="btn-toggle" onclick="toggleSidebar()" aria-label="Toggle Sidebar">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                     </button>
-                    <button id="btn-fetch" class="btn btn-primary" onclick="triggerFetch()">
-                        ⚡ 立即采集
-                    </button>
+                </div>
+                
+                <!-- 核心搜索模块 -->
+                <div class="header-center search-module">
+                    <form id="global-search-form" onsubmit="handleGlobalSearch(event)">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="global-search-input" placeholder="Search Ticker (e.g. MRNA)..." autocomplete="off">
+                    </form>
+                </div>
+
+                <div class="header-right">
+                    <div class="topbar-actions">
+                        <button id="btn-refresh" class="btn btn-ghost btn-sm" onclick="refreshCurrentPage()">🔄 Refresh</button>
+                        <button id="btn-fetch" class="btn btn-primary btn-sm" onclick="triggerFetch()">⚡ Fetch</button>
+                    </div>
                 </div>
             </header>
 
+            <!-- ===== 内容区 ===== -->
+            <main id="main-content">
+
             <!-- ===== Dashboard 概览 ===== -->
             <section id="page-dashboard" class="page active">
-                <div class="stats-grid">
-                    <div class="stat-card" id="stat-total">
-                        <div class="stat-icon">📰</div>
-                        <div class="stat-value">—</div>
-                        <div class="stat-label">新闻总数</div>
-                    </div>
-                    <div class="stat-card stat-bullish" id="stat-bullish">
-                        <div class="stat-icon">🟢</div>
-                        <div class="stat-value">—</div>
-                        <div class="stat-label">利好信号</div>
-                    </div>
-                    <div class="stat-card stat-bearish" id="stat-bearish">
-                        <div class="stat-icon">🔴</div>
-                        <div class="stat-value">—</div>
-                        <div class="stat-label">利空信号</div>
-                    </div>
-                    <div class="stat-card stat-high" id="stat-high">
-                        <div class="stat-icon">⚡</div>
-                        <div class="stat-value">—</div>
-                        <div class="stat-label">高影响事件</div>
-                    </div>
-                </div>
-
-                <div class="dashboard-grid">
-                    <div class="card" id="card-high-impact">
-                        <div class="card-header">
-                            <h2>🔥 高影响事件</h2>
-                            <span class="badge badge-warning">需关注</span>
-                        </div>
-                        <div class="card-body" id="high-impact-list">
-                            <div class="loading-placeholder">加载中...</div>
-                        </div>
-                    </div>
-                    <div class="card" id="card-recent">
-                        <div class="card-header">
-                            <h2>📰 最新新闻</h2>
-                        </div>
-                        <div class="card-body" id="recent-news-list">
-                            <div class="loading-placeholder">加载中...</div>
-                        </div>
-                    </div>
+                <div id="home-feed-list" class="analysis-list">
+                    <div class="loading-placeholder">加载新闻流...</div>
                 </div>
             </section>
 
-            <!-- ===== 新闻流 ===== -->
-            <section id="page-news" class="page">
-                <div class="filter-bar">
-                    <select id="news-filter-ticker" class="filter-select" onchange="loadNews()">
-                        <option value="">全部公司</option>
-                    </select>
-                    <select id="news-filter-source" class="filter-select" onchange="loadNews()">
-                        <option value="">全部来源</option>
-                        <option value="finnhub">Finnhub</option>
-                    </select>
-                    <button class="btn btn-ghost" onclick="loadNews()">🔍 筛选</button>
+            <!-- ===== 最新消息 ===== -->
+            <section id="page-latest" class="page">
+                <div id="latest-news-list" class="news-list">
+                    <div class="loading-placeholder">按时间降序加载中...</div>
                 </div>
-                <div id="news-list" class="news-list">
-                    <div class="loading-placeholder">加载中...</div>
+            </section>
+
+            <!-- ===== 类别 ===== -->
+            <section id="page-categories" class="page">
+                <div class="category-main-grid" id="category-grid">
+                    <!-- 动态注入分类卡片 -->
+                    <div class="loading-placeholder">加载分类中...</div>
                 </div>
             </section>
 
@@ -192,14 +154,13 @@
                 </div>
             </section>
         </main>
+        </div>
     </div>
 
     <!-- Toast 通知 -->
     <div id="toast-container"></div>
 
-    <script src="mock-data.js"></script>
-    <script src="app.js"></script>
-    <script src="/static/mock-data.js" onerror=""></script>
-    <script src="/static/app.js" onerror=""></script>
+    <script src="./mock-data.js"></script>
+    <script src="./app.js"></script>
 </body>
 </html>
