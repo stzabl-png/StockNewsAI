@@ -26,44 +26,89 @@ def get_client() -> httpx.AsyncClient:
     return _http_client
 
 
+# ── 常见 Ticker 别名映射（DB ticker → Polygon ticker）────────────────────────
+# 当公司存储的 ticker 和实际交易代码不一致时使用
+TICKER_ALIASES = {
+    "TSMC":   "TSM",    # Taiwan Semiconductor ADR
+    "BABA":   "BABA",   # Already correct
+    "BRK_B":  "BRK.B",  # Berkshire B
+    "BRK_A":  "BRK.A",  # Berkshire A
+    "GE_WS":  "GE.WS",
+    "GOOGL":  "GOOGL",
+    # ADR suffix patterns - strip common suffixes
+}
+
+def _normalize_ticker(ticker: str) -> list[str]:
+    """Return a list of ticker variants to try, most likely first."""
+    t = ticker.upper().strip()
+    candidates = [t]
+
+    # Try alias table
+    if t in TICKER_ALIASES:
+        candidates.insert(0, TICKER_ALIASES[t])
+
+    # Strip common ADR/warrant suffixes and try
+    for suffix in [".WS", ".WT", ".R", ".U", ".W", "W", "P"]:
+        if t.endswith(suffix) and len(t) > len(suffix) + 1:
+            candidates.append(t[: -len(suffix)])
+
+    return list(dict.fromkeys(candidates))  # deduplicate preserving order
+
+
+async def _fetch_bars(ticker: str, start: str, end: str, limit: int) -> list:
+    """Fetch OHLCV bars from Polygon for a single ticker. Returns [] on no data."""
+    url = (
+        f"{POLYGON_BASE}/v2/aggs/ticker/{ticker}/range/1/day"
+        f"/{start}/{end}"
+    )
+    params = {
+        "adjusted": "true",
+        "sort": "asc",
+        "limit": limit,
+        "apiKey": settings.POLYGON_API_KEY,
+    }
+    try:
+        resp = await get_client().get(url, params=params)
+        if resp.status_code == 200:
+            return resp.json().get("results", [])
+    except Exception:
+        pass
+    return []
+
+
 @router.get("/market/chart/{ticker}")
 async def get_price_chart(
     ticker: str = Path(..., description="股票代码，如 AAPL"),
     days: int = Query(30, ge=5, le=365, description="返回多少天的数据"),
 ):
     """
-    获取指定股票最近 N 天的日线 OHLCV 数据（用于前端 Sparkline）
-    返回格式: [{date, close, open, high, low, volume, change_pct}]
+    获取指定股票最近 N 天的日线 OHLCV 数据（用于前端 K线图）
+    返回格式: {ticker, bars:[{date, open, high, low, close, volume, change_pct}], ...}
+    自动尝试多种 ticker 变体（别名映射 + ADR 后缀处理）
     """
     if not settings.POLYGON_API_KEY:
         raise HTTPException(status_code=503, detail="Polygon API Key 未配置")
 
-    end = date.today() - timedelta(days=1)  # 昨日收盘
-    start = end - timedelta(days=days + 10)  # 多取一些确保有足够交易日
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=days + 15)
+    limit = days + 15
 
-    url = (
-        f"{POLYGON_BASE}/v2/aggs/ticker/{ticker.upper()}/range/1/day"
-        f"/{start}/{end}"
-    )
-    params = {
-        "adjusted": "true",
-        "sort": "asc",
-        "limit": days + 10,
-        "apiKey": settings.POLYGON_API_KEY,
-    }
+    # Try ticker variants in order until we get data
+    candidates = _normalize_ticker(ticker)
+    bars = []
+    used_ticker = candidates[0]
+    for candidate in candidates:
+        bars = await _fetch_bars(candidate, start.isoformat(), end.isoformat(), limit)
+        if bars:
+            used_ticker = candidate
+            break
 
-    try:
-        resp = await get_client().get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Polygon 请求失败: {e}")
-
-    bars = data.get("results", [])
     if not bars:
-        return JSONResponse({"ticker": ticker.upper(), "bars": [], "message": "暂无数据"})
+        return JSONResponse({
+            "ticker": ticker.upper(),
+            "bars": [],
+            "message": f"暂无数据 (尝试了: {', '.join(candidates)})",
+        })
 
     # 取最近 days 个交易日
     bars = bars[-days:]
@@ -88,7 +133,8 @@ async def get_price_chart(
     ) if processed[0]["open"] else 0
 
     return {
-        "ticker":        ticker.upper(),
+        "ticker":        used_ticker,   # return the actual ticker that worked
+        "query_ticker":  ticker.upper(),
         "bars":          processed,
         "latest_close":  processed[-1]["close"],
         "latest_date":   processed[-1]["date"],

@@ -1379,12 +1379,50 @@ async function chartSetPeriod(days, init) {
     _chartDays = days;
     document.querySelectorAll('.cpill').forEach(b => b.classList.toggle('active', +b.dataset.days === days));
     if (!_chart) _initChart();
+
+    const priceEl = document.getElementById('chart-price-info');
+    if (priceEl) priceEl.textContent = '加载中...';
+
     try {
         const data = await API.getChart(_chartTicker, days);
         _chartRawData = data.bars || [];
+
+        if (!_chartRawData.length) {
+            // Show empty state in chart container
+            const container = document.getElementById('chart-container');
+            if (container) {
+                container.innerHTML = `
+                    <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text-muted)">
+                        <div style="font-size:40px">📊</div>
+                        <div style="font-size:14px;font-weight:600">${_chartTicker} 暂无价格图表数据</div>
+                        <div style="font-size:12px;opacity:0.7">${data.message || '该股票在 Polygon 数据源中无记录'}</div>
+                        <div style="font-size:11px;opacity:0.5">可能原因：ADR代码不同 / 场外交易 / 未上市</div>
+                    </div>`;
+            }
+            if (priceEl) priceEl.textContent = '无数据';
+            return;
+        }
+
+        // Restore chart container if it was replaced by empty state
+        const container = document.getElementById('chart-container');
+        if (container && !container.querySelector('canvas')) {
+            container.innerHTML = '';
+            _initChart();
+        }
+
         _applyChartData(_chartRawData);
+
+        // Update title to show actual ticker used (in case alias was applied)
+        if (data.ticker && data.ticker !== _chartTicker) {
+            const tickerEl = document.getElementById('chart-ticker');
+            if (tickerEl) tickerEl.textContent = `${data.ticker} (${_chartTicker})`;
+        }
     } catch(e) {
         console.error('Chart fetch error:', e);
+        const container = document.getElementById('chart-container');
+        if (container) {
+            container.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--bearish);font-size:13px">图表加载失败: ${e.message}</div>`;
+        }
     }
 }
 
