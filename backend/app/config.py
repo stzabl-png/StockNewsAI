@@ -15,28 +15,23 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
 
     # ---------- API Keys ----------
-    FINNHUB_API_KEY: str = ""
+    RTPR_API_KEY: str = ""               # 一手新闻稿 API (rtpr.io)
+    FINNHUB_API_KEY: str = ""            # 保留兼容（已弃用）
     OPENAI_API_KEY: str = ""
-    ANTHROPIC_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""             # Google Gemini API
+    POLYGON_API_KEY: str = ""            # Polygon.io — 新闻 + 行情数据
 
-    # ---------- 微信推送 (WxPusher) ----------
-    WXPUSHER_APP_TOKEN: str = ""
-    WXPUSHER_UIDS: str = ""  # 逗号分隔多个 UID
-
-    # ---------- Telegram 推送 ----------
-    TELEGRAM_BOT_TOKEN: str = ""
-    TELEGRAM_CHAT_ID: str = ""
+    # ---------- 微信推送（Server酱）----------
+    WECHAT_SENDKEY: str = ""
 
     # ---------- App Settings ----------
-    APP_NAME: str = "NewsAnalysisForStock"
+    APP_NAME: str = "QuantNews"
     DEBUG: bool = True
 
-    # ---------- LLM 模型配置 ----------
-    OPENAI_MODEL: str = "gpt-4o-mini"        # Level 1 初筛（便宜）
-    OPENAI_MODEL_L2: str = "gpt-4o"          # Level 2 深度分析（更强）
-
-    # ---------- 微信推送 ----------
-    WECHAT_SENDKEY: str = ""
+    # ---------- LLM 模型配置（全量切换为 OpenAI）----------
+    OPENAI_MODEL_L1: str = "gpt-4o-mini"          # L1 初筛（替代 Gemini Flash）
+    OPENAI_MODEL_L2: str = "gpt-4o-mini"          # L2 中级分析
+    OPENAI_MODEL_L3: str = "gpt-4o-2024-08-06"    # L3 深度分析（替代 Gemini Pro）
 
     model_config = {
         "env_file": ".env",

@@ -3,12 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NewsAnalysisForStock — 美股生物医药新闻智能分析</title>
-    <meta name="description" content="7×24小时美股生物医药新闻智能分析系统">
+    <title>QuantNews — 美股生物医药新闻智能分析</title>
+    <meta name="description" content="QuantNews — 7×24小时美股生物医药新闻智能分析平台">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="/static/style.css?v=1777017927">
+
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div id="app">
@@ -16,7 +19,7 @@
         <aside id="sidebar" class="collapsible-sidebar">
             <div class="sidebar-logo">
                 <span class="logo-icon">🧬</span>
-                <span class="logo-text">StockNews<span class="logo-ai">AI</span></span>
+                <span class="logo-text">Quant<span class="logo-ai">News</span></span>
             </div>
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-page="dashboard">
@@ -28,12 +31,20 @@
                     <span class="nav-label">最新消息</span>
                 </a>
                 <a href="#" class="nav-item" data-page="categories">
-                    <span class="nav-icon">🏷️</span>
-                    <span class="nav-label">类别</span>
+                     <span class="nav-icon">📊</span>
+                     <span class="nav-label">行情</span>
+                 </a>
+                <a href="#" class="nav-item" data-page="analysis">
+                    <span class="nav-icon">🔍</span>
+                    <span class="nav-label">AI 分析</span>
                 </a>
                 <a href="#" class="nav-item" data-page="watchlist">
                     <span class="nav-icon">📋</span>
                     <span class="nav-label">Watchlist</span>
+                </a>
+                <a href="#" class="nav-item" data-page="system">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-label">系统</span>
                 </a>
             </nav>
         </aside>
@@ -59,7 +70,9 @@
                 <div class="header-right">
                     <div class="topbar-actions">
                         <button id="btn-refresh" class="btn btn-ghost btn-sm" onclick="refreshCurrentPage()">🔄 Refresh</button>
-                        <button id="btn-fetch" class="btn btn-primary btn-sm" onclick="triggerFetch()">⚡ Fetch</button>
+                        <button id="btn-fetch" class="btn btn-primary btn-sm" onclick="triggerFetch()" title="从 Polygon.io 抓取最新2小时新闻">⚡ Fetch</button>
+                        <button id="btn-fetch-polygon24" class="btn btn-ghost btn-sm" onclick="triggerFetchPolygon24h()" style="border:1px solid var(--border-color);" title="补抓过去24小时新闻">🔄 24h补抓</button>
+                        <button id="btn-fetch-edgar" class="btn btn-ghost btn-sm" onclick="triggerFetchEDGAR()" style="border:1px solid var(--border-color);">📋 EDGAR</button>
                     </div>
                 </div>
             </header>
@@ -81,11 +94,17 @@
                 </div>
             </section>
 
-            <!-- ===== 类别 ===== -->
-            <section id="page-categories" class="page">
-                <div class="category-main-grid" id="category-grid">
-                    <!-- 动态注入分类卡片 -->
-                    <div class="loading-placeholder">加载分类中...</div>
+            <!-- ===== 行情 Market ===== -->
+            <section id="page-categories" class="page market-page">
+                <!-- Tab Navigation -->
+                <div class="market-tabs" id="market-tabs">
+                    <button class="mtab active" data-tab="sectors" onclick="switchMarketTab('sectors')">板块</button>
+                    <button class="mtab" data-tab="concepts" onclick="switchMarketTab('concepts')">概念</button>
+                    <button class="mtab" data-tab="styles" onclick="switchMarketTab('styles')">风格</button>
+                </div>
+                <!-- Content area -->
+                <div id="category-grid" class="market-tab-content">
+                    <div class="loading-placeholder">加载行情数据中...</div>
                 </div>
             </section>
 
@@ -107,6 +126,7 @@
                         <option value="medium">🔶 中影响</option>
                         <option value="low">▫️ 低影响</option>
                     </select>
+                    <button class="btn btn-ghost btn-sm" onclick="reanalyzeAll()" style="margin-left: auto;">🔄 全部重新分析</button>
                 </div>
                 <div id="analysis-list" class="analysis-list">
                     <div class="loading-placeholder">加载中...</div>
@@ -160,7 +180,44 @@
     <!-- Toast 通知 -->
     <div id="toast-container"></div>
 
-    <script src="./mock-data.js"></script>
-    <script src="./app.js"></script>
+    <!-- ===== K线图 弹窗 ===== -->
+    <div id="chart-modal" class="chart-modal" style="display:none" onclick="handleChartModalBgClick(event)">
+        <div class="chart-modal-inner">
+            <!-- Header -->
+            <div class="chart-modal-header">
+                <div>
+                    <span id="chart-ticker" class="chart-ticker-label">--</span>
+                    <span id="chart-company" class="chart-company-label"></span>
+                </div>
+                <div id="chart-price-info" class="chart-price-info"></div>
+                <button class="chart-close-btn" onclick="closeChartModal()">✕</button>
+            </div>
+            <!-- Period Selector -->
+            <div class="chart-controls">
+                <div class="chart-periods">
+                    <button class="cpill active" data-days="7"   onclick="chartSetPeriod(7)">1周</button>
+                    <button class="cpill"        data-days="30"  onclick="chartSetPeriod(30)">1月</button>
+                    <button class="cpill"        data-days="90"  onclick="chartSetPeriod(90)">3月</button>
+                    <button class="cpill"        data-days="180" onclick="chartSetPeriod(180)">6月</button>
+                    <button class="cpill"        data-days="365" onclick="chartSetPeriod(365)">1年</button>
+                    <button class="cpill"        data-days="730" onclick="chartSetPeriod(730)">2年</button>
+                </div>
+                <div class="chart-indicators">
+                    <button class="cindic active" data-key="vol"  onclick="chartToggle('vol')">成交量</button>
+                    <button class="cindic"        data-key="ma5"  onclick="chartToggle('ma5')">MA5</button>
+                    <button class="cindic"        data-key="ma10" onclick="chartToggle('ma10')">MA10</button>
+                    <button class="cindic active" data-key="ma20" onclick="chartToggle('ma20')">MA20</button>
+                    <button class="cindic active" data-key="ma50" onclick="chartToggle('ma50')">MA50</button>
+                    <button class="cindic"        data-key="ma60" onclick="chartToggle('ma60')">MA60</button>
+                </div>
+            </div>
+            <!-- Chart container -->
+            <div id="chart-container" class="chart-container"></div>
+            <div class="chart-hint">📌 滚轮缩放 · 拖拽平移 · 双击重置</div>
+        </div>
+    </div>
+
+    <script src="/static/mock-data.js?v=1777017927"></script>
+    <script src="/static/app.js?v=1777017927"></script>
 </body>
 </html>

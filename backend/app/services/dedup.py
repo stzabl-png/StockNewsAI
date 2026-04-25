@@ -41,3 +41,16 @@ class DedupService:
         """
         raw = f"{source}:{url}:{headline}".strip().lower()
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# ── 模块级便捷函数（供 polygon_news 等新采集器直接调用）─────────────────────
+
+async def is_duplicate(redis, fingerprint: str) -> bool:
+    """检查指纹是否已在 Redis 中（不写入）"""
+    return await redis.sismember(REDIS_KEY, fingerprint)
+
+
+async def mark_seen(redis, fingerprint: str, ttl: int = 604800):
+    """将指纹写入 Redis，TTL 默认 7 天"""
+    await redis.sadd(REDIS_KEY, fingerprint)
+    await redis.expire(REDIS_KEY, ttl)

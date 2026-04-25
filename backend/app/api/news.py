@@ -1,7 +1,8 @@
 """
 新闻 API
 - 新闻列表查询（支持筛选）
-- 手动触发 Finnhub 采集
+- 手动触发 RTPR / Polygon / EDGAR 采集
+- 可扩展接入更多数据源
 """
 from typing import Optional
 
@@ -14,7 +15,6 @@ from app.database import get_db
 from app.models.company import Company
 from app.models.news import News
 from app.schemas.news import NewsResponse, NewsFetchResult
-from app.services.fetchers.finnhub import FinnhubFetcher
 from app.services.analyzer import run_analysis_background
 
 router = APIRouter(tags=["News"])
@@ -23,7 +23,7 @@ router = APIRouter(tags=["News"])
 @router.get("/news", response_model=list[NewsResponse])
 async def list_news(
     ticker: Optional[str] = Query(None, description="按股票代码筛选"),
-    source: Optional[str] = Query(None, description="按数据来源筛选: finnhub/fda/sec/clinical_trials"),
+    source: Optional[str] = Query(None, description="按数据来源筛选: rtpr/finnhub/polygon"),
     limit: int = Query(50, ge=1, le=200, description="每页数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
     db: AsyncSession = Depends(get_db),
@@ -45,7 +45,6 @@ async def list_news(
     result = await db.execute(query)
     news_items = result.unique().scalars().all()
 
-    # 构建响应（带 ticker 和 company_name）
     return [
         NewsResponse(
             id=item.id,
@@ -103,8 +102,61 @@ async def get_news(news_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/fetch/finnhub", response_model=NewsFetchResult)
-async def fetch_finnhub_news(
+# =====================================================
+#  数据采集接口 — 多数据源
+# =====================================================
+
+@router.post("/fetch/polygon", response_model=NewsFetchResult)
+async def fetch_polygon_news(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    ticker: Optional[str] = Query(None, description="只采集指定公司（可选）"),
+    hours_back: int = Query(2, ge=1, le=48, description="往前抓取多少小时内的新闻"),
+    auto_analyze: bool = Query(True, description="采集后是否自动触发 AI 分析"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动触发 Polygon.io 新闻采集（主力数据源）
+    - 覆盖所有 Watchlist 活跃公司
+    - 支持按 ticker 单独采集
+    - 自动打板块 + 概念标签
+    """
+    from app.services.fetchers.polygon_news import PolygonNewsFetcher
+
+    redis = getattr(request.app.state, "redis", None)
+    fetcher = PolygonNewsFetcher(session=db, redis=redis)
+
+    if ticker:
+        result = await db.execute(
+            select(Company).where(Company.ticker == ticker.upper())
+        )
+        company = result.scalar_one_or_none()
+        if not company:
+            raise HTTPException(status_code=404, detail=f"股票 {ticker} 不在 Watchlist 中")
+        stat = await fetcher.fetch_ticker(company, hours_back=hours_back)
+        await db.commit()
+        result_dict = {
+            "companies_processed": 1,
+            "total_fetched": stat["fetched"],
+            "new_articles": stat["new"],
+            "errors": 1 if stat["error"] else 0,
+        }
+    else:
+        result_dict = await fetcher.fetch_all(hours_back=hours_back)
+
+    if auto_analyze and result_dict["new_articles"] > 0:
+        background_tasks.add_task(run_analysis_background)
+
+    return NewsFetchResult(
+        companies_processed=result_dict["companies_processed"],
+        total_fetched=result_dict["total_fetched"],
+        new_articles=result_dict["new_articles"],
+        errors=[f"{result_dict['errors']} failed"] if result_dict.get("errors") else [],
+    )
+
+
+@router.post("/fetch/rtpr", response_model=NewsFetchResult)
+async def fetch_rtpr_news(
     request: Request,
     background_tasks: BackgroundTasks,
     ticker: Optional[str] = Query(None, description="只采集指定公司（可选）"),
@@ -112,17 +164,59 @@ async def fetch_finnhub_news(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    手动触发 Finnhub 新闻采集
-    - 不传 ticker: 采集 Watchlist 全部活跃公司
-    - 传 ticker: 只采集指定公司
-    - auto_analyze=true: 采集后自动在后台触发 LLM 分析
+    手动触发 RTPR 一手新闻稿采集
     """
+    from app.services.fetchers.rtpr import RTPRFetcher
+
     tickers = [ticker] if ticker else None
-    fetcher = FinnhubFetcher(session=db, redis=request.app.state.redis)
+    fetcher = RTPRFetcher(session=db, redis=request.app.state.redis)
     result = await fetcher.fetch_all(tickers=tickers)
 
-    # 有新文章时自动触发后台分析
     if auto_analyze and result["new_articles"] > 0:
         background_tasks.add_task(run_analysis_background)
 
     return NewsFetchResult(**result)
+
+
+@router.post("/fetch/edgar", response_model=NewsFetchResult)
+async def fetch_edgar_news(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    ticker: Optional[str] = Query(None, description="只采集指定公司（可选）"),
+    auto_analyze: bool = Query(True, description="采集后是否自动触发 AI 分析"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    手动触发 SEC EDGAR 8-K 公告采集
+    """
+    from app.services.fetchers.edgar import EDGARFetcher
+
+    tickers = [ticker] if ticker else None
+    fetcher = EDGARFetcher(session=db, redis=request.app.state.redis)
+    result = await fetcher.fetch_all(tickers=tickers)
+
+    if auto_analyze and result["new_articles"] > 0:
+        background_tasks.add_task(run_analysis_background)
+
+    return NewsFetchResult(**result)
+
+
+# 保留 Finnhub 兼容接口（指向 RTPR）
+@router.post("/fetch/finnhub", response_model=NewsFetchResult)
+async def fetch_finnhub_news(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    ticker: Optional[str] = Query(None),
+    auto_analyze: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    [兼容旧接口] 已切换为 RTPR 数据源
+    """
+    return await fetch_rtpr_news(
+        request=request,
+        background_tasks=background_tasks,
+        ticker=ticker,
+        auto_analyze=auto_analyze,
+        db=db,
+    )

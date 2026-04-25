@@ -1,6 +1,6 @@
 """
 定时任务调度器
-- 每小时采集 Finnhub 新闻
+- 每小时采集 RTPR 一手新闻稿
 - 采集后自动分析未处理新闻
 - 每天凌晨 3 点清理 30 天前的低影响新闻
 """
@@ -17,7 +17,10 @@ from app.config import settings
 from app.database import async_session
 from app.models.news import News
 from app.models.analysis import Analysis
-from app.services.fetchers.finnhub import FinnhubFetcher
+from app.services.fetchers.rtpr import RTPRFetcher
+from app.services.fetchers.edgar import EDGARFetcher
+from app.services.fetchers.polygon_news import PolygonNewsFetcher
+from app.services.fetchers.polygon_market import PolygonMarketFetcher
 from app.services.analyzer import run_analysis_background
 
 logger = logging.getLogger(__name__)
@@ -33,13 +36,13 @@ scheduler = AsyncIOScheduler(timezone="America/New_York")
 async def job_fetch_news():
     """
     定时采集任务 — 每小时执行
-    从 Finnhub 获取所有 Watchlist 公司的最新新闻
+    从 RTPR 获取所有 Watchlist 公司的一手新闻稿
     """
-    logger.info("[Scheduler] ⏰ 开始定时采集...")
+    logger.info("[Scheduler] ⏰ 开始定时采集 (RTPR)...")
     try:
         redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         async with async_session() as session:
-            fetcher = FinnhubFetcher(session=session, redis=redis)
+            fetcher = RTPRFetcher(session=session, redis=redis)
             result = await fetcher.fetch_all()
             logger.info(
                 f"[Scheduler] ✅ 采集完成: "
@@ -55,7 +58,74 @@ async def job_fetch_news():
 
         await redis.close()
     except Exception as e:
-        logger.error(f"[Scheduler] ❌ 采集任务失败: {e}")
+        logger.error(f"[Scheduler] ❌ RTPR 采集任务失败: {e}")
+
+
+async def job_fetch_polygon_news():
+    """
+    Polygon.io 新闻采集 — 每 30 分钟执行（Tier A 核心股）
+    """
+    logger.info("[Scheduler] ⏰ 开始 Polygon 新闻采集...")
+    try:
+        redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        async with async_session() as session:
+            fetcher = PolygonNewsFetcher(session=session, redis=redis)
+            result = await fetcher.fetch_all(hours_back=1)
+            logger.info(
+                f"[Scheduler] ✅ Polygon 采集完成: "
+                f"{result['companies_processed']} 家, "
+                f"新增 {result['new_articles']} 条"
+            )
+            if result["new_articles"] > 0:
+                logger.info("[Scheduler] 🧠 触发自动分析...")
+                await run_analysis_background()
+        await redis.close()
+    except Exception as e:
+        logger.error(f"[Scheduler] ❌ Polygon 新闻采集失败: {e}")
+
+
+async def job_fetch_market_snapshots():
+    """
+    每日行情快照 — 美东时间 20:30（收盘后4小时）执行
+    """
+    logger.info("[Scheduler] 📊 开始每日行情快照采集...")
+    try:
+        async with async_session() as session:
+            fetcher = PolygonMarketFetcher(session=session)
+            result = await fetcher.fetch_all_daily()
+            logger.info(
+                f"[Scheduler] ✅ 行情快照完成: 保存 {result['saved']} 条, 错误 {result['errors']} 条"
+            )
+            await fetcher.close()
+    except Exception as e:
+        logger.error(f"[Scheduler] ❌ 行情快照任务失败: {e}")
+
+
+async def job_fetch_edgar():
+    """
+    定时采集 SEC EDGAR 8-K 公告 — 每 2 小时执行
+    完全免费，无限历史
+    """
+    logger.info("[Scheduler] ⏰ 开始定时采集 (EDGAR)...")
+    try:
+        redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        async with async_session() as session:
+            fetcher = EDGARFetcher(session=session, redis=redis)
+            result = await fetcher.fetch_all()
+            logger.info(
+                f"[Scheduler] ✅ EDGAR 采集完成: "
+                f"处理 {result['companies_processed']} 家公司, "
+                f"获取 {result['total_fetched']} 条, "
+                f"新增 {result['new_articles']} 条"
+            )
+
+            if result["new_articles"] > 0:
+                logger.info("[Scheduler] 🧠 触发自动分析...")
+                await run_analysis_background()
+
+        await redis.close()
+    except Exception as e:
+        logger.error(f"[Scheduler] ❌ EDGAR 采集任务失败: {e}")
 
 
 async def job_analyze_pending():
@@ -122,17 +192,47 @@ async def job_cleanup_old_data():
 
 def init_scheduler():
     """初始化并启动调度器"""
-    # 1. 每小时采集新闻
+    # 1. Polygon.io 新闻采集 — 每 30 分钟（主力数据源）
     scheduler.add_job(
-        job_fetch_news,
-        trigger=IntervalTrigger(hours=1),
-        id="fetch_news",
-        name="📰 Finnhub 新闻采集",
+        job_fetch_polygon_news,
+        trigger=IntervalTrigger(minutes=30),
+        id="fetch_polygon_news",
+        name="📰 Polygon 新闻采集",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 2. 每 2 小时补充分析（确保无遗漏）
+    # 2. RTPR 一手新闻稿 — 每小时（补充）
+    scheduler.add_job(
+        job_fetch_news,
+        trigger=IntervalTrigger(hours=1, start_date=datetime.now() + timedelta(minutes=2)),
+        id="fetch_news",
+        name="📰 RTPR 新闻稿采集",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 3. SEC EDGAR 8-K — 每 2 小时
+    scheduler.add_job(
+        job_fetch_edgar,
+        trigger=IntervalTrigger(hours=2, start_date=datetime.now() + timedelta(minutes=5)),
+        id="fetch_edgar",
+        name="📋 SEC EDGAR 8-K 采集",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 4. 每日行情快照 — 美东 20:30（收盘后）
+    scheduler.add_job(
+        job_fetch_market_snapshots,
+        trigger=CronTrigger(hour=20, minute=30, timezone="America/New_York"),
+        id="fetch_market_snapshots",
+        name="📊 每日行情快照",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 5. 每 2 小时补充分析（确保无遗漏）
     scheduler.add_job(
         job_analyze_pending,
         trigger=IntervalTrigger(hours=2, start_date=datetime.now() + timedelta(minutes=10)),
@@ -142,7 +242,7 @@ def init_scheduler():
         max_instances=1,
     )
 
-    # 3. 每天凌晨 3 点清理旧数据
+    # 6. 每天凌晨 3 点清理旧数据
     scheduler.add_job(
         job_cleanup_old_data,
         trigger=CronTrigger(hour=3, minute=0),
@@ -153,7 +253,7 @@ def init_scheduler():
     )
 
     scheduler.start()
-    logger.info("[Scheduler] ⏰ 调度器已启动，已注册 3 个定时任务")
+    logger.info("[Scheduler] ⏰ 调度器已启动，已注册 6 个定时任务")
 
 
 def get_jobs_info() -> list[dict]:

@@ -20,6 +20,36 @@ from app.services.analyzer import NewsAnalyzer, run_analysis_background
 router = APIRouter(prefix="/analysis", tags=["Analysis"])
 
 
+@router.get("/progress")
+async def analysis_progress(request: Request):
+    """查询批量分析进度（从 Redis 读取）"""
+    redis = request.app.state.redis
+    progress = await redis.hgetall("analysis_progress")
+    if not progress:
+        return {"status": "idle", "total": 0, "completed": 0, "high_impact": 0, "errors": 0, "current": ""}
+    return {
+        "status": progress.get("status", "unknown"),
+        "total": int(progress.get("total", 0)),
+        "completed": int(progress.get("completed", 0)),
+        "high_impact": int(progress.get("high_impact", 0)),
+        "errors": int(progress.get("errors", 0)),
+        "current": progress.get("current", ""),
+    }
+
+
+@router.get("/test_gemini")
+async def test_gemini():
+    """测试 Gemini 配置是否正常"""
+    try:
+        import google.generativeai as genai
+        from app.config import settings
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel(settings.GEMINI_MODEL_L1)
+        response = await model.generate_content_async("Reply OK")
+        return {"status": "ok", "response": response.text}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
 @router.get("", response_model=list[AnalysisResponse])
 async def list_analyses(
     ticker: Optional[str] = Query(None, description="按股票代码筛选"),
@@ -149,6 +179,32 @@ async def analyze_batch(
         # 异步模式 — 后台执行
         background_tasks.add_task(run_analysis_background)
         return AnalyzeBatchResult(total=-1, analyzed=0, high_impact=0, errors=0)
+
+
+@router.post("/reanalyze-all", response_model=AnalyzeBatchResult)
+async def reanalyze_all(
+    background_tasks: BackgroundTasks,
+    sync: bool = Query(False, description="是否同步执行"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    清空所有旧分析结果，用最新规则重新分析全部新闻
+    ⚠️ 这会删除所有现有分析！
+    """
+    from sqlalchemy import delete
+
+    # 删除所有分析记录
+    deleted = await db.execute(delete(Analysis))
+    await db.commit()
+    count = deleted.rowcount
+
+    if sync:
+        analyzer = NewsAnalyzer(session=db)
+        result = await analyzer.analyze_batch()
+        return AnalyzeBatchResult(**result)
+    else:
+        background_tasks.add_task(run_analysis_background)
+        return AnalyzeBatchResult(total=count, analyzed=0, high_impact=0, errors=0)
 
 
 @router.post("/{news_id}", response_model=AnalysisResponse)

@@ -28,6 +28,18 @@ async def lifespan(app: FastAPI):
     from app.services.scheduler import init_scheduler, scheduler
     init_scheduler()
 
+    # 后台预热行情缓存（不阻塞启动）
+    import asyncio as _asyncio
+    async def _warmup():
+        await _asyncio.sleep(5)  # 等待DB连接稳定
+        try:
+            from app.api.market import get_market_overview
+            await get_market_overview()
+            print("✅ 行情缓存预热完成")
+        except Exception as e:
+            print(f"⚠️ 行情缓存预热失败: {e}")
+    _asyncio.ensure_future(_warmup())
+
     yield
 
     # ---- Shutdown ----
@@ -38,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="美股生物医药新闻智能分析系统",
+    description="QuantNews — 美股生物医药新闻智能分析平台",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
@@ -60,12 +72,16 @@ from app.api.news import router as news_router
 from app.api.analysis import router as analysis_router
 from app.api.scheduler import router as scheduler_router
 from app.api.notify import router as notify_router
+from app.api.sectors import router as sectors_router
+from app.api.market import router as market_router
 
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(notify_router, prefix="/api")
+app.include_router(sectors_router, prefix="/api")
+app.include_router(market_router, prefix="/api")
 
 # ---- 前端静态文件 ----
 import os

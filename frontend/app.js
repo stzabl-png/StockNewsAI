@@ -89,6 +89,17 @@ const API = {
 
     // Fetch
     fetchFinnhub() { return this.request('/api/fetch/finnhub', { method: 'POST' }); },
+    fetchPolygon(h) { return this.request(`/api/fetch/polygon?hours_back=${h||2}`, { method: 'POST' }); },
+    fetchRTPR() { return this.request('/api/fetch/rtpr', { method: 'POST' }); },
+    fetchEDGAR() { return this.request('/api/fetch/edgar', { method: 'POST' }); },
+
+    // Sectors
+    getSectors() { return this.request('/api/sectors'); },
+    getSectorCompanies(name) { return this.request(`/api/sector-companies/${encodeURIComponent(name)}`); },
+    getCompanyNews(t) { return this.request(`/api/news?ticker=${t}&limit=20`); },
+    getMarketOverview() { return this.request('/api/market/overview'); },
+    getConceptCompanies(id) { return this.request(`/api/concepts/${id}/companies`); },
+    getChart(ticker, days) { return this.request(`/api/market/chart/${ticker}?days=${days||30}`); },
 };
 
 
@@ -212,28 +223,444 @@ async function loadLatest() {
     }
 }
 
-async function loadCategories() {
-    const gridEl = document.getElementById('category-grid');
-    if (!gridEl) return;
-    
-    // Placeholder categories UI
-    const cats = [
-        { id: 'biotech', icon: '🧬', label: '生物医疗', count: 34, color: '#dcfce7' },
-        { id: 'clinical', icon: '💉', label: '临床数据', count: 12, color: '#fee2e2' },
-        { id: 'fda', icon: '🏛️', label: 'FDA 动态', count: 8, color: '#dbeafe' },
-        { id: 'tech', icon: '💻', label: '科技前沿', count: 56, color: '#f3e8ff' },
-        { id: 'pharma', icon: '💊', label: '制药公司', count: 42, color: '#fef08a' }
-    ];
+let _marketData = null;
+let _marketTab  = 'sectors';
 
-    gridEl.innerHTML = cats.map(c => `
-        <div class="category-card" onclick="document.getElementById('global-search-input').value='${c.label}'; handleGlobalSearch(new Event('submit'));" style="border-left: 4px solid ${c.color}">
-            <div class="category-icon">${c.icon}</div>
-            <div class="category-info">
-                <h3>${c.label}</h3>
-                <span class="category-count">${c.count} 条相关</span>
+async function loadCategories() {
+    const el = document.getElementById('category-grid');
+    if (!el) return;
+    // If data already cached, just re-render current tab
+    if (_marketData) { renderMarketTab(el, _marketData, _marketTab); return; }
+
+    // Show loading with progress hint
+    el.innerHTML = `
+        <div style="text-align:center;padding:40px 20px">
+            <div style="font-size:32px;margin-bottom:12px">📊</div>
+            <div style="font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:6px">正在加载行情数据</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:20px">首次加载约 5-10 秒，之后缓存 1 小时</div>
+            <div class="market-loading-bar"><div class="market-loading-fill"></div></div>
+        </div>`;
+
+    try {
+        // Add 30s timeout to prevent infinite hang
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 30000);
+        _marketData = await API.getMarketOverview();
+        clearTimeout(tid);
+        renderMarketTab(el, _marketData, _marketTab);
+    } catch(e) {
+        const msg = e.name === 'AbortError' ? '请求超时，请刷新重试' : e.message;
+        el.innerHTML = `
+            <div style="text-align:center;padding:60px 20px">
+                <div style="font-size:32px;margin-bottom:12px">⚠️</div>
+                <div style="font-size:14px;font-weight:600;color:var(--bearish);margin-bottom:8px">加载失败</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">${msg}</div>
+                <button onclick="loadCategories()" style="padding:8px 20px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;font-size:13px">🔄 重试</button>
+            </div>`;
+    }
+}
+
+function switchMarketTab(tab) {
+    _marketTab = tab;
+    // Update tab button states
+    document.querySelectorAll('.mtab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    const el = document.getElementById('category-grid');
+    if (!el) return;
+    if (_marketData) {
+        renderMarketTab(el, _marketData, tab);
+    }
+}
+
+function renderMarketTab(el, data, tab) {
+    el.innerHTML = '';
+    if (tab === 'sectors')  renderSectorsTab(el, data);
+    if (tab === 'concepts') renderConceptsTab(el, data);
+    if (tab === 'styles')   renderStylesTab(el, data);
+}
+
+// ------- Market Tab Renderers --------
+let _moConceptsShowAll = false;
+
+function renderSectorsTab(el, data) {
+    const allSectors = data.sectors || [];
+
+    // Only show sectors that have companies, put 综合类 last
+    const active = allSectors.filter(s => s.company_count > 0 && s.name !== '综合类');
+    const misc = allSectors.filter(s => s.name === '综合类' && s.company_count > 0);
+
+    // Group by group field
+    const groups = {};
+    active.forEach(s => {
+        const g = s.group || '其他';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(s);
+    });
+
+    // Sort bar
+    let _sortedSectors = [...active];
+    const sortBar = buildSortBar(key => {
+        if (key === 'up')      _sortedSectors.sort((a,b) => (b.change_pct||0) - (a.change_pct||0));
+        if (key === 'down')    _sortedSectors.sort((a,b) => (a.change_pct||0) - (b.change_pct||0));
+        if (key === 'default') _sortedSectors = [...active];
+        renderFlat(_sortedSectors);
+    });
+    el.appendChild(sortBar);
+
+    // Container for sector groups
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'padding:0 14px 8px';
+    el.appendChild(wrap);
+
+    // Flat sort render (after sort button)
+    let _isSorted = false;
+    function renderFlat(sectors) {
+        _isSorted = true;
+        wrap.innerHTML = '';
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:8px 0';
+        sectors.forEach(s => appendSectorCard(grid, s));
+        wrap.appendChild(grid);
+    }
+
+    function renderGrouped(groupMap) {
+        _isSorted = false;
+        wrap.innerHTML = '';
+        const GROUP_ORDER = ['科技','新能源','医疗','金融','能源','材料','消费','工业','建筑地产','农业','文化','通信','综合'];
+        const orderedGroups = [...new Set([...GROUP_ORDER.filter(g => groupMap[g]), ...Object.keys(groupMap)])];
+        orderedGroups.forEach(grp => {
+            const sectors = groupMap[grp];
+            if (!sectors?.length) return;
+            // Group header
+            const header = document.createElement('div');
+            header.style.cssText = 'font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;margin:18px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)';
+            header.textContent = `${grp}  ·  ${sectors.length} 个板块`;
+            wrap.appendChild(header);
+            // Cards grid
+            const grid = document.createElement('div');
+            grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:4px';
+            sectors.forEach(s => appendSectorCard(grid, s));
+            wrap.appendChild(grid);
+        });
+    }
+
+    function appendSectorCard(grid, s) {
+        const card = document.createElement('div');
+        const isUp = (s.change_pct || 0) >= 0;
+        const color = s.change_pct != null ? (isUp ? '#10b981' : '#ef4444') : 'var(--text-muted)';
+        const chgStr = s.change_pct != null ? (isUp ? '+' : '') + s.change_pct + '%' : '--';
+        const leaderChgStr = s.leader_change != null ? (s.leader_change > 0 ? '+' : '') + s.leader_change + '%' : '';
+        const leaderColor = (s.leader_change || 0) >= 0 ? '#10b981' : '#ef4444';
+        card.className = 'sector-card-compact';
+        card.style.cssText = `background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:all 0.2s;border-left:4px solid ${color}`;
+        card.innerHTML = `
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <span style="font-size:26px;flex-shrink:0">${s.icon}</span>
+                <div style="min-width:0;flex:1">
+                    <div style="font-size:14px;font-weight:700;color:var(--text-primary)">${s.name}</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:1px">${s.company_count} 家公司</div>
+                </div>
             </div>
-        </div>
-    `).join('');
+            <div style="display:flex;justify-content:space-between;align-items:flex-end">
+                <div>
+                    <div style="font-size:22px;font-weight:800;color:${color};line-height:1">${chgStr}</div>
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:3px">平均涨跌</div>
+                </div>
+                ${s.leader ? `<div style="text-align:right">
+                    <div style="font-size:12px;font-weight:700;color:var(--accent)">${s.leader}</div>
+                    <div style="font-size:11px;color:${leaderColor};font-weight:600">${leaderChgStr}</div>
+                    <div style="font-size:10px;color:var(--text-muted)">领涨</div>
+                </div>` : ''}
+            </div>`;
+        card.onmouseover = () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1)'; };
+        card.onmouseout  = () => { card.style.transform = ''; card.style.boxShadow = ''; };
+        card.onclick = () => handleSectorCardClick(s, card);
+        grid.appendChild(card);
+    }
+
+    // Initial render: grouped
+    renderGrouped(groups);
+
+    // Add 综合类 as collapsible at the bottom
+    if (misc.length) {
+        const miscHeader = document.createElement('div');
+        miscHeader.style.cssText = 'font-size:12px;color:var(--text-muted);margin:18px 0 8px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none';
+        miscHeader.innerHTML = `<span>🏢 综合类 (${misc[0].company_count} 家未分类)</span><span style="font-size:11px;opacity:0.7">▼ 点击展开</span>`;
+        let miscExpanded = false;
+        const miscGrid = document.createElement('div');
+        miscGrid.style.cssText = 'display:none;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:12px';
+        misc.forEach(s => appendSectorCard(miscGrid, s));
+        miscHeader.onclick = () => {
+            miscExpanded = !miscExpanded;
+            miscGrid.style.display = miscExpanded ? 'grid' : 'none';
+            miscHeader.querySelector('span:last-child').textContent = miscExpanded ? '▲ 收起' : '▼ 点击展开';
+        };
+        wrap.appendChild(miscHeader);
+        wrap.appendChild(miscGrid);
+    }
+
+    // Date note
+    const note = document.createElement('div');
+    note.className = 'mo-refresh-note';
+    note.textContent = '数据日期: ' + data.date + ' · 每小时更新 · ' + active.length + ' 个行业板块';
+    el.appendChild(note);
+}
+
+function renderConceptsTab(el, data) {
+    const concepts = data.concepts || [];
+    let defaultConcepts = concepts.filter(c => c.is_default);
+    let moreConcepts    = concepts.filter(c => !c.is_default);
+
+    // Sort bar
+    const sortBarEl = buildSortBar(key => {
+        if (key === 'up')   defaultConcepts.sort((a,b) => (b.change_pct||0) - (a.change_pct||0));
+        if (key === 'down') defaultConcepts.sort((a,b) => (a.change_pct||0) - (b.change_pct||0));
+        if (key === 'default') {
+            defaultConcepts = concepts.filter(c => c.is_default);
+        }
+        // Re-render rows
+        const rowsWrap = document.getElementById('concept-rows-wrap');
+        if (rowsWrap) {
+            rowsWrap.innerHTML = '';
+            defaultConcepts.forEach(c => rowsWrap.appendChild(moRow({
+                icon: c.icon, name: c.name, name_en: c.name_en,
+                change_pct: c.change_pct, leader: c.leader, leader_change: c.leader_change,
+                id: 'concept_' + c.id,
+            }, handleConceptClick)));
+        }
+    });
+    _lastSortCallback = sortBarEl._onSort;
+    el.appendChild(sortBarEl);
+    // Section header
+    const hdr = document.createElement('div');
+    hdr.className = 'mo-section-header';
+    hdr.innerHTML = '<span class="mo-section-title">概念主题</span><span class="mo-section-sub">领涨股</span>';
+    el.appendChild(hdr);
+
+    // Default concepts rows
+    const rowsWrap = document.createElement('div');
+    rowsWrap.id = 'concept-rows-wrap';
+    defaultConcepts.forEach(c => {
+        rowsWrap.appendChild(moRow({
+            icon: c.icon, name: c.name, name_en: c.name_en,
+            change_pct: c.change_pct, leader: c.leader, leader_change: c.leader_change,
+            id: 'concept_' + c.id,
+        }, handleConceptClick));
+    });
+    el.appendChild(rowsWrap);
+
+    // More toggle
+    const morePill = document.createElement('div');
+    morePill.className = 'mo-show-more';
+    morePill.textContent = `更多 ∨  (${moreConcepts.length} 个主题)`;
+    morePill.onclick = () => {
+        _moConceptsShowAll = !_moConceptsShowAll;
+        morePill.textContent = _moConceptsShowAll ? '收起 ∧' : `更多 ∨  (${moreConcepts.length} 个主题)`;
+        const extra = document.getElementById('mo-extra-concepts');
+        if (extra) extra.style.display = _moConceptsShowAll ? 'block' : 'none';
+    };
+    el.appendChild(morePill);
+
+    const extraWrap = document.createElement('div');
+    extraWrap.id = 'mo-extra-concepts';
+    extraWrap.style.display = 'none';
+    moreConcepts.forEach(c => {
+        extraWrap.appendChild(moRow({
+            icon: c.icon, name: c.name, name_en: c.name_en,
+            change_pct: c.change_pct, leader: c.leader, leader_change: c.leader_change,
+            id: 'concept_' + c.id,
+        }, handleConceptClick));
+    });
+    el.appendChild(extraWrap);
+
+    const note = document.createElement('div');
+    note.className = 'mo-refresh-note';
+    note.textContent = '数据日期: ' + data.date;
+    el.appendChild(note);
+}
+
+function renderStylesTab(el, data) {
+    const hdr = document.createElement('div');
+    hdr.className = 'mo-section-header';
+    hdr.innerHTML = '<span class="mo-section-title">风格 ETF</span><span class="mo-section-sub">代表指数</span>';
+    el.appendChild(hdr);
+
+    (data.styles || []).forEach(s => {
+        el.appendChild(moRow({
+            icon: s.icon, name: s.name, name_en: s.name_en,
+            change_pct: s.change_pct, leader: s.ticker,
+            leader_change: s.change_pct, id: 'style_' + s.ticker,
+            etf: s.ticker,
+        }, handleStyleClick));
+    });
+
+    const note = document.createElement('div');
+    note.className = 'mo-refresh-note';
+    note.textContent = '数据日期: ' + data.date;
+    el.appendChild(note);
+}
+// Drill-down: show companies for a sector/concept
+async function handleSectorClick(r, rowEl) {
+    toggleMoDrill(r.id, r.name, rowEl, async () => {
+        return await API.getSectorCompanies(r.name);
+    });
+}
+
+// Card-style sector click (for the sectors tab grid)
+let _activeSectorCard = null;
+async function handleSectorCardClick(s, cardEl) {
+    // Remove any existing drill panel
+    const existing = document.getElementById('sector-drill-container');
+    if (existing) existing.remove();
+
+    // Toggle off if same card clicked
+    if (_activeSectorCard === s.name) {
+        _activeSectorCard = null;
+        document.querySelectorAll('.sector-card-active').forEach(c => c.classList.remove('sector-card-active'));
+        return;
+    }
+    _activeSectorCard = s.name;
+    document.querySelectorAll('.sector-card-active').forEach(c => c.classList.remove('sector-card-active'));
+    cardEl.classList.add('sector-card-active');
+
+    // Find the grid that contains this card, insert drill panel after the grid
+    const grid = cardEl.parentElement;
+    const drillEl = document.createElement('div');
+    drillEl.id = 'sector-drill-container';
+    drillEl.style.cssText = `
+        grid-column: 1 / -1;
+        background: var(--bg-card);
+        border: 1px solid var(--accent);
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-top: 4px;
+        margin-bottom: 8px;
+        animation: slideDown 0.2s ease;
+    `;
+
+    // Insert drill panel after the grid (not inside it)
+    grid.insertAdjacentElement('afterend', drillEl);
+    drillEl.innerHTML = `<div style="padding:8px;color:var(--text-muted);display:flex;align-items:center;gap:8px">
+        <div class="loading-placeholder" style="padding:0;background:none"></div>加载 ${s.name} 公司...
+    </div>`;
+    drillEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    try {
+        const companies = await API.getSectorCompanies(s.name);
+
+        if (!companies.length) {
+            drillEl.innerHTML = `<div style="padding:8px;color:var(--text-muted)">暂无公司数据</div>`;
+            return;
+        }
+
+        drillEl.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                <div style="font-size:15px;font-weight:700;color:var(--text-primary)">${s.icon} ${s.name} · ${companies.length} 家公司</div>
+                <button onclick="
+                    document.getElementById('sector-drill-container')?.remove();
+                    document.querySelectorAll('.sector-card-active').forEach(c=>c.classList.remove('sector-card-active'));
+                    _activeSectorCard=null;
+                " style="font-size:13px;color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:6px;hover:background:var(--bg-hover)">✕ 关闭</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">
+                ${companies.map(c => `
+                    <div class="mo-company-chip" data-ticker="${c.ticker}" data-name="${(c.name||'').replace(/"/g,'&quot;')}" onclick="openCompanyNews(this.dataset.ticker, this.dataset.name)">
+                        <span class="chip-ticker">${c.ticker}</span>
+                        <span style="font-size:10px;color:var(--text-muted);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px">${escHtml((c.name||'').split(' ').slice(0,3).join(' '))}</span>
+                        ${c.news_24h > 0 ? `<span style="font-size:10px;color:var(--bullish)">📰${c.news_24h}</span>` : ''}
+                    </div>`).join('')}
+            </div>`;
+    } catch(e) {
+        drillEl.innerHTML = `<div style="color:var(--bearish);padding:8px">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function handleConceptClick(r, rowEl) {
+    const conceptId = parseInt(r.id.replace('concept_', ''));
+    toggleMoDrill(r.id, r.name, rowEl, async () => {
+        return await API.getConceptCompanies(conceptId);
+    });
+}
+
+// ── moRow: 构建一行数据行（概念/风格 Tab 通用） ──
+function moRow(r, clickHandler) {
+    const row = document.createElement('div');
+    row.className = 'mo-row';
+    row.id = 'row_' + r.id;
+
+    const hasPct   = r.change_pct != null;
+    const isUp     = hasPct && r.change_pct >= 0;
+    const updown   = !hasPct ? 'flat' : (isUp ? 'up' : 'down');
+    const chgStr   = !hasPct ? '--' : (isUp ? '+' : '') + r.change_pct + '%';
+
+    const hasLdr   = r.leader != null;
+    const isLdrUp  = hasLdr && r.leader_change >= 0;
+    const lUpdown  = !hasLdr ? 'flat' : (isLdrUp ? 'up' : 'down');
+    const lChgStr  = !hasLdr ? '' : (isLdrUp ? '+' : '') + r.leader_change + '%';
+
+    row.innerHTML = `
+        <span class="mo-name"><span class="mo-icon">${r.icon || ''}</span>${escHtml(r.name)}</span>
+        <span class="mo-change ${updown}">${chgStr}</span>
+        <div class="mo-divider"></div>
+        <span class="mo-leader">${r.leader || '--'}</span>
+        <span class="mo-leader-change ${lUpdown}">${lChgStr}</span>`;
+
+    if (clickHandler) {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => clickHandler(r, row));
+    }
+    return row;
+}
+
+let _drillOpen = null;
+async function toggleMoDrill(id, sectionTitle, rowEl, fetcher) {
+    // Remove existing drill if same
+    const existing = document.getElementById('drill_' + id);
+    if (existing) {
+        existing.remove();
+        _drillOpen = null;
+        return;
+    }
+    // Remove any other open drill
+    if (_drillOpen) {
+        const old = document.getElementById('drill_' + _drillOpen);
+        if (old) old.remove();
+    }
+
+    _drillOpen = id;
+    const panel = document.createElement('div');
+    panel.className = 'mo-drill-panel open';
+    panel.id = 'drill_' + id;
+    panel.innerHTML = '<div class="loading-placeholder" style="padding:10px">加载中...</div>';
+    rowEl.after(panel);
+
+    try {
+        const companies = await fetcher();
+        if (!companies || companies.length === 0) {
+            panel.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:12px">暂无数据</div>';
+            return;
+        }
+        panel.innerHTML = `<div class="mo-drill-title">${sectionTitle} · 相关公司</div>
+            <div class="mo-company-grid">${companies.map(c => `
+                <div class="mo-company-chip" data-ticker="${c.ticker}" data-name="${(c.name||'').replace(/"/g,'&quot;')}" onclick="openCompanyNews(this.dataset.ticker,this.dataset.name)">
+                    <span class="chip-ticker">${c.ticker}</span>
+                    <span style="font-size:10px;color:var(--text-muted);text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(c.name)}</span>
+                    ${c.news_24h > 0 ? `<span style="font-size:10px;color:var(--bullish)">📰${c.news_24h}</span>` : ''}
+                </div>`).join('')}
+            </div>`;
+    } catch(e) {
+        panel.innerHTML = `<div style="padding:10px;color:var(--bearish);font-size:12px">加载失败: ${e.message}</div>`;
+    }
+}
+
+
+function formatMarketCap(cap) {
+    if (!cap) return '';
+    if (cap >= 1e12) return `$${(cap/1e12).toFixed(1)}T`;
+    if (cap >= 1e9)  return `$${(cap/1e9).toFixed(0)}B`;
+    if (cap >= 1e6)  return `$${(cap/1e6).toFixed(0)}M`;
+    return '';
 }
 
 
@@ -505,21 +932,36 @@ async function resumeSchedulerJob(jobId) {
 async function triggerFetch() {
     const btn = document.getElementById('btn-fetch');
     btn.disabled = true;
-    btn.textContent = '⏳ 采集中...';
-
+    btn.textContent = '⏳ Polygon采集中...';
     try {
-        const result = await API.fetchFinnhub();
+        const result = await API.fetchPolygon(2);
         showToast(
-            `✅ 采集完成: ${result.new_articles} 条新新闻 (共 ${result.total_fetched} 条)`,
+            `✅ Polygon完成: ${result.new_articles} 条新新闻 (处理 ${result.total_fetched} 条)`,
             result.new_articles > 0 ? 'success' : 'info'
         );
-        // Refresh current page
         setTimeout(() => loadPageData(currentPage), 2000);
     } catch (e) {
-        showToast(`❌ 采集失败: ${e.message}`, 'error');
+        showToast(`❌ Polygon失败: ${e.message}`, 'error');
     } finally {
         btn.disabled = false;
-        btn.textContent = '⚡ 立即采集';
+        btn.textContent = '⚡ Fetch';
+    }
+}
+
+async function triggerFetchPolygon24h() {
+    const btn = document.getElementById('btn-fetch-polygon24');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 24h抓取中...'; }
+    try {
+        const result = await API.fetchPolygon(24);
+        showToast(
+            `✅ 24h: ${result.new_articles} 条新新闻 (${result.companies_processed} 家公司)`,
+            result.new_articles > 0 ? 'success' : 'info'
+        );
+        setTimeout(() => loadPageData(currentPage), 2000);
+    } catch(e) {
+        showToast(`❌ 失败: ${e.message}`, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 24h补抓'; }
     }
 }
 
@@ -694,3 +1136,338 @@ window.toggleSidebar = function() {
         sidebar.classList.toggle('collapsed');
     }
 };
+
+// ============================================================
+//  Sparkline Chart Builder (pure SVG, no dependencies)
+// ============================================================
+function buildSparkline(chartData) {
+    const bars = chartData.bars;
+    if (!bars || bars.length < 2) return '';
+
+    const W = 340, H = 80, PAD = 4;
+    const closes = bars.map(b => b.close);
+    const minP = Math.min(...closes);
+    const maxP = Math.max(...closes);
+    const range = maxP - minP || 1;
+
+    // Build SVG polyline points
+    const pts = closes.map((c, i) => {
+        const x = PAD + (i / (closes.length - 1)) * (W - PAD * 2);
+        const y = H - PAD - ((c - minP) / range) * (H - PAD * 2);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+
+    // Build gradient fill polygon
+    const fillPts = `${PAD},${H} ` + pts + ` ${W - PAD},${H}`;
+
+    const isUp = chartData.period_change >= 0;
+    const color = isUp ? '#10b981' : '#ef4444';
+    const bgColor = isUp ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)';
+    const changeSign = isUp ? '+' : '';
+    const latest = chartData.latest_close;
+    const pctStr = `${changeSign}${chartData.period_change}%`;
+    const latestDate = chartData.latest_date;
+    const firstDate = bars[0].date;
+
+    // Volume bars (normalized to bottom 15px)
+    const vols = bars.map(b => b.volume || 0);
+    const maxVol = Math.max(...vols) || 1;
+    const volBars = vols.map((v, i) => {
+        const x = PAD + (i / (vols.length - 1)) * (W - PAD * 2) - 2;
+        const vh = (v / maxVol) * 14;
+        const vy = H - vh;
+        const bc = bars[i].change_pct >= 0 ? '#10b98140' : '#ef444440';
+        return `<rect x="${x.toFixed(1)}" y="${vy.toFixed(1)}" width="4" height="${vh.toFixed(1)}" fill="${bc}"/>`;
+    }).join('');
+
+    return `
+    <div style="padding:14px 0 10px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+            <span style="font-size:22px;font-weight:800;color:var(--text-primary)">$${latest?.toFixed(2)}</span>
+            <span style="font-size:13px;font-weight:600;color:${color};padding:2px 8px;background:${bgColor};border-radius:20px">
+                ${pctStr} <span style="font-size:10px;font-weight:400;color:var(--text-muted)">30D</span>
+            </span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">${firstDate} → ${latestDate}</span>
+        </div>
+        <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;max-width:100%">
+            <defs>
+                <linearGradient id="grad-${chartData.ticker.replace(/\./g,'_')}" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="${color}" stop-opacity="0.25"/>
+                    <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+                </linearGradient>
+            </defs>
+            ${volBars}
+            <polygon points="${fillPts}" fill="url(#grad-${chartData.ticker.replace(/\./g,'_')})" stroke="none"/>
+            <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <circle cx="${pts.split(' ').pop().split(',')[0]}" cy="${pts.split(' ').pop().split(',')[1]}" r="3" fill="${color}"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-top:2px">
+            <span>H: $${Math.max(...bars.map(b=>b.high||0)).toFixed(2)}</span>
+            <span>L: $${Math.min(...bars.map(b=>b.low||Infinity)).toFixed(2)}</span>
+            <span>Vol: ${formatVolume(bars[bars.length-1].volume)}</span>
+        </div>
+    </div>`;
+}
+
+function formatVolume(v) {
+    if (!v) return '-';
+    if (v >= 1e9) return (v/1e9).toFixed(1) + 'B';
+    if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v/1e3).toFixed(0) + 'K';
+    return v;
+}
+
+// ---- Style ETF click handler ----
+// Style ETF descriptions
+const STYLE_INFO = {
+    "QQQ":  { desc: "追踪 NASDAQ 100 指数，科技成长龙头", tickers: ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","AVGO","COST","NFLX"] },
+    "XLK":  { desc: "追踪 S&P 500 信息技术板块 ETF",    tickers: ["AAPL","MSFT","NVDA","AVGO","ORCL","AMD","CSCO","ADBE","TXN","INTU"] },
+    "VTV":  { desc: "追踪大盘价值型股票",                 tickers: ["BRK.B","JPM","UNH","XOM","JNJ","PG","V","HD","CVX","MRK"] },
+    "VYM":  { desc: "追踪高股息率蓝筹股",                 tickers: ["JPM","JNJ","PG","XOM","CVX","PFE","T","VZ","KO","MO"] },
+    "IWM":  { desc: "追踪 Russell 2000 小盘股指数",      tickers: ["SAIA","STLD","CLF","RGTI","IONQ","HOOD","OPEN"] },
+    "SPY":  { desc: "追踪 S&P 500 标普500全市场指数",    tickers: ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","BRK.B","TSLA","UNH","JPM"] },
+    "ICLN": { desc: "追踪全球清洁能源公司",               tickers: ["ENPH","FSLR","CEG","VST","NEE","ETN","ALB"] },
+    "XBI":  { desc: "追踪生物科技中小盘公司",             tickers: ["MRNA","CRSP","BEAM","NTLA","EXAS","REGN","VRTX","BIIB"] },
+};
+
+async function handleStyleClick(r, rowEl) {
+    const etfTicker = r.etf || r.leader || r.name_en;
+    const info = STYLE_INFO[etfTicker] || { desc: etfTicker + " ETF", tickers: [] };
+
+    toggleMoDrill(r.id, r.name, rowEl, async () => {
+        if (!info.tickers.length) return [];
+        // Return company objects for these tickers
+        const sectors = await API.getSectors();
+        // Build fake company list from known tickers
+        return info.tickers.map(t => ({
+            ticker: t, name: t, gics_sub_sector: '', news_24h: 0
+        }));
+    });
+}
+
+// ============================================================
+//  K线图系统 (Lightweight Charts v4)
+// ============================================================
+let _chart       = null;
+let _candleSeries = null;
+let _volSeries    = null;
+let _maSeries     = {};
+let _chartTicker  = '';
+let _chartDays    = 90;
+let _chartRawData = [];
+let _indicators   = { vol: true, ma5: false, ma10: false, ma20: true, ma50: true, ma60: false };
+
+const MA_COLORS = { ma5:'#f59e0b', ma10:'#3b82f6', ma20:'#10b981', ma50:'#ef4444', ma60:'#a855f7' };
+
+function openChartModal(ticker, companyName) {
+    _chartTicker = ticker.toUpperCase();
+    document.getElementById('chart-ticker').textContent  = _chartTicker;
+    document.getElementById('chart-company').textContent = companyName || '';
+    document.getElementById('chart-price-info').textContent = '加载中...';
+    document.getElementById('chart-modal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    _initChart();
+    chartSetPeriod(_chartDays, true);
+}
+
+function closeChartModal() {
+    document.getElementById('chart-modal').style.display = 'none';
+    document.body.style.overflow = '';
+    if (_chart) { _chart.remove(); _chart = null; _candleSeries = null; _volSeries = null; _maSeries = {}; }
+}
+
+function handleChartModalBgClick(e) {
+    if (e.target === document.getElementById('chart-modal')) closeChartModal();
+}
+
+function _getTheme() {
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+    return {
+        bg:      isDark ? '#0f1117' : '#ffffff',
+        text:    isDark ? '#e2e8f0' : '#1a202c',
+        grid:    isDark ? '#1e2030' : '#e2e8f0',
+        border:  isDark ? '#2d3748' : '#cbd5e0',
+        upColor:   '#10b981',
+        downColor: '#ef4444',
+    };
+}
+
+function _initChart() {
+    const container = document.getElementById('chart-container');
+    if (!container) return;
+    if (_chart) { _chart.remove(); _chart = null; _maSeries = {}; }
+
+    const t = _getTheme();
+    _chart = LightweightCharts.createChart(container, {
+        width:  container.clientWidth,
+        height: container.clientHeight || 420,
+        layout: { background: { color: t.bg }, textColor: t.text },
+        grid:   { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: t.border, scaleMarginTop: 0.1, scaleMarginBottom: 0.25 },
+        timeScale: { borderColor: t.border, timeVisible: true, secondsVisible: false },
+        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
+    });
+
+    // Candlestick series
+    _candleSeries = _chart.addCandlestickSeries({
+        upColor:          t.upColor,   downColor:      t.downColor,
+        borderUpColor:    t.upColor,   borderDownColor:t.downColor,
+        wickUpColor:      t.upColor,   wickDownColor:  t.downColor,
+    });
+
+    // Volume sub-pane
+    _volSeries = _chart.addHistogramSeries({
+        color: 'rgba(99,102,241,0.4)', priceFormat: { type: 'volume' },
+        priceScaleId: 'vol',
+    });
+    _chart.priceScale('vol').applyOptions({
+        scaleMarginTop: 0.8, scaleMarginBottom: 0,
+        drawTicks: false, borderVisible: false,
+    });
+
+    // Sync visibility
+    _volSeries.applyOptions({ visible: _indicators.vol });
+
+    // MA series
+    for (const [key, color] of Object.entries(MA_COLORS)) {
+        _maSeries[key] = _chart.addLineSeries({
+            color, lineWidth: 1, priceLineVisible: false,
+            lastValueVisible: false, crosshairMarkerVisible: false,
+            visible: _indicators[key],
+        });
+    }
+
+    // Crosshair price display
+    _chart.subscribeCrosshairMove(param => _updatePriceInfo(param));
+
+    // Double-click reset
+    container.addEventListener('dblclick', () => _chart.timeScale().fitContent());
+
+    // Resize observer
+    const ro = new ResizeObserver(() => {
+        if (_chart) _chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+    });
+    ro.observe(container);
+}
+
+function _updatePriceInfo(param) {
+    if (!_candleSeries) return;
+    const el = document.getElementById('chart-price-info');
+    if (!param || !param.time || param.seriesData.size === 0) {
+        if (_chartRawData.length) {
+            const last = _chartRawData[_chartRawData.length - 1];
+            const chg = last.close - last.open;
+            const pct = (chg / last.open * 100).toFixed(2);
+            const sign = chg >= 0 ? '+' : '';
+            el.innerHTML = `<span style="font-size:20px;font-weight:800">$${last.close.toFixed(2)}</span>
+                <span style="font-size:13px;color:${chg>=0?'#10b981':'#ef4444'};margin-left:6px">${sign}${chg.toFixed(2)} (${sign}${pct}%)</span>
+                <span style="font-size:11px;color:var(--text-muted);margin-left:8px">${last.date}</span>`;
+        }
+        return;
+    }
+    const d = param.seriesData.get(_candleSeries);
+    if (!d) return;
+    const chg = d.close - d.open;
+    const pct = (chg / d.open * 100).toFixed(2);
+    const sign = chg >= 0 ? '+' : '';
+    el.innerHTML = `<span style="font-size:16px;font-weight:800">O:${d.open.toFixed(2)} H:${d.high.toFixed(2)} L:${d.low.toFixed(2)} C:${d.close.toFixed(2)}</span>
+        <span style="font-size:13px;color:${chg>=0?'#10b981':'#ef4444'};margin-left:8px">${sign}${chg.toFixed(2)} (${sign}${pct}%)</span>`;
+}
+
+async function chartSetPeriod(days, init) {
+    _chartDays = days;
+    document.querySelectorAll('.cpill').forEach(b => b.classList.toggle('active', +b.dataset.days === days));
+    if (!_chart) _initChart();
+    try {
+        const data = await API.getChart(_chartTicker, days);
+        _chartRawData = data.bars || [];
+        _applyChartData(_chartRawData);
+    } catch(e) {
+        console.error('Chart fetch error:', e);
+    }
+}
+
+function _applyChartData(bars) {
+    if (!bars.length || !_candleSeries) return;
+
+    const candles = bars.map(b => ({
+        time: b.date, open: b.open, high: b.high, low: b.low, close: b.close
+    }));
+    const volumes = bars.map(b => ({
+        time: b.date, value: b.volume || 0,
+        color: b.close >= b.open ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'
+    }));
+
+    _candleSeries.setData(candles);
+    _volSeries.setData(volumes);
+
+    // Calculate and set MA series
+    for (const [key] of Object.entries(MA_COLORS)) {
+        const period = parseInt(key.replace('ma', ''));
+        const maData = _calcMA(bars, period);
+        _maSeries[key].setData(maData);
+    }
+
+    _chart.timeScale().fitContent();
+    _updatePriceInfo(null);
+}
+
+function _calcMA(bars, period) {
+    const result = [];
+    for (let i = period - 1; i < bars.length; i++) {
+        const slice = bars.slice(i - period + 1, i + 1);
+        const avg = slice.reduce((s, b) => s + b.close, 0) / period;
+        result.push({ time: bars[i].date, value: +avg.toFixed(2) });
+    }
+    return result;
+}
+
+function chartToggle(key) {
+    _indicators[key] = !_indicators[key];
+    const btn = document.querySelector(`.cindic[data-key="${key}"]`);
+    if (btn) btn.classList.toggle('active', _indicators[key]);
+    if (key === 'vol' && _volSeries)    _volSeries.applyOptions({ visible: _indicators[key] });
+    if (key !== 'vol' && _maSeries[key]) _maSeries[key].applyOptions({ visible: _indicators[key] });
+}
+
+// ============================================================
+//  排序功能 Sort
+// ============================================================
+let _sortKey = 'default';   // 'default' | 'up' | 'down'
+
+function buildSortBar(onSort) {
+    const bar = document.createElement('div');
+    bar.className = 'mo-sort-bar';
+    bar.innerHTML = `
+        <span>排序:</span>
+        <button class="sort-btn active" data-s="default" onclick="applySort('default')">默认</button>
+        <button class="sort-btn" data-s="up"      onclick="applySort('up')">涨幅 ↑</button>
+        <button class="sort-btn" data-s="down"    onclick="applySort('down')">跌幅 ↓</button>`;
+    bar._onSort = onSort;
+    return bar;
+}
+let _lastSortCallback = null;
+
+function applySort(key) {
+    _sortKey = key;
+    document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b.dataset.s === key));
+    if (_lastSortCallback) _lastSortCallback(key);
+}
+
+// ============================================================
+//  修复: openCompanyNews → openCompanyChart (打开K线图)
+// ============================================================
+function openCompanyNews(ticker, companyName) {
+    // If LightweightCharts is loaded, show chart; fallback to news page
+    if (typeof LightweightCharts !== 'undefined') {
+        openChartModal(ticker, companyName || ticker);
+    } else {
+        showPage('news');
+        setTimeout(() => {
+            const inp = document.getElementById('global-search-input');
+            if (inp) inp.value = ticker;
+            loadNews(ticker);
+        }, 100);
+    }
+}

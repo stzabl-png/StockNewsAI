@@ -6,6 +6,7 @@ from app.models.news import News
 from app.models.analysis import Analysis
 from app.models.trial import ClinicalTrial
 from app.models.catalyst import Catalyst
+from app.models.sector import Sector, SubSector, Concept
 
 __all__ = [
     "Company",
@@ -13,4 +14,7 @@ __all__ = [
     "Analysis",
     "ClinicalTrial",
     "Catalyst",
+    "Sector",
+    "SubSector",
+    "Concept",
 ]
