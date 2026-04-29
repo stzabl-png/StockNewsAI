@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # ---------- LLM 模型配置（全量切换为 OpenAI）----------
-    OPENAI_MODEL_L1: str = "gpt-4o-mini"          # L1 初筛（全量）
-    OPENAI_MODEL_L2: str = "gpt-4o-mini"          # L2 中级分析
-    OPENAI_MODEL_L3: str = "gpt-4o-mini"          # L3 深度分析（暂用mini，速度快，TPM限制宽松）
+    OPENAI_MODEL_L1: str = "gpt-4o-mini"          # L1 初筛（200K TPM）
+    OPENAI_MODEL_L2: str = "gpt-4o-mini"          # L2 中级分析（200K TPM）
+    OPENAI_MODEL_L3: str = "gpt-4.1-mini"         # L3 深度分析（200K TPM，质量优于4o-mini）
 
     model_config = {
         "env_file": ".env",
