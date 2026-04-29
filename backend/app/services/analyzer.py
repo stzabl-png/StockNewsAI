@@ -596,12 +596,16 @@ class NewsAnalyzer:
             logger.error(f"分析新闻失败: {err_str[:200]}")
             raise RuntimeError(err_str)
 
-    async def analyze_batch(self, redis=None) -> dict:
-        """批量分析所有未分析的新闻（支持进度追踪）"""
+    async def analyze_batch(self, redis=None, hours_back: int = 48) -> dict:
+        """批量分析未分析的新闻（默认只处理最近 hours_back 小时，避免处理海量旧数据）"""
+        from datetime import datetime, timedelta, timezone
+        since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+
         result = await self.session.execute(
             select(News)
             .outerjoin(Analysis)
             .where(Analysis.id == None)  # noqa: E711
+            .where(News.published_at >= since)
             .options(joinedload(News.company))
             .order_by(News.published_at.desc())
         )
@@ -884,15 +888,15 @@ def _enforce_signal_rules(trade_signal: dict, market: dict) -> dict:
 #  后台分析任务
 # =====================================================
 
-async def run_analysis_background():
-    """后台任务入口 — 分析所有未处理的新闻（带进度追踪）"""
+async def run_analysis_background(hours_back: int = 48):
+    """后台任务入口 — 分析最近 hours_back 小时内未处理的新闻（带进度追踪）"""
     import redis.asyncio as aioredis
-    logger.info("[Analyzer] 后台分析任务启动...")
+    logger.info(f"[Analyzer] 后台分析任务启动（最近 {hours_back}h）...")
     redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     try:
         async with async_session() as session:
             analyzer = NewsAnalyzer(session=session)
-            result = await analyzer.analyze_batch(redis=redis)
+            result = await analyzer.analyze_batch(redis=redis, hours_back=hours_back)
             logger.info(
                 f"[Analyzer] 后台分析完成: "
                 f"总计 {result['total']}, 已分析 {result['analyzed']}, "
