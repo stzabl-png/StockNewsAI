@@ -626,8 +626,8 @@ class NewsAnalyzer:
             logger.error(f"分析新闻失败: {err_str[:200]}")
             raise RuntimeError(err_str)
 
-    async def analyze_batch(self, redis=None, hours_back: int = 48, concurrency: int = 8) -> dict:
-        """批量分析未分析的新闻（并发版，默认8并发）"""
+    async def analyze_batch(self, redis=None, hours_back: int = 48, concurrency: int = 5) -> dict:
+        """批量分析未分析的新闻（并发版，默认5并发，稳定不卡）"""
         from datetime import datetime, timedelta, timezone
         import asyncio
         since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
@@ -685,7 +685,11 @@ class NewsAnalyzer:
                         if not news_obj:
                             return
                         analyzer_task = NewsAnalyzer(session=task_session)
-                        analysis = await analyzer_task.analyze_news(news_obj)
+                        # 90秒总超时保护（防止 API 永久挂起）
+                        analysis = await asyncio.wait_for(
+                            analyzer_task.analyze_news(news_obj),
+                            timeout=90.0
+                        )
 
                     async with lock:
                         if analysis:
@@ -700,6 +704,10 @@ class NewsAnalyzer:
                                 "errors": str(counters["errors"]),
                                 "current": f"{ticker}: {title_short}",
                             })
+                except asyncio.TimeoutError:
+                    logger.warning(f"[Analyzer] ⏰ {ticker} 超时(90s)，跳过")
+                    async with lock:
+                        counters["errors"] += 1
                 except RuntimeError as e:
                     err_str = str(e)
                     if "OPENAI_QUOTA_EXCEEDED" in err_str:
@@ -969,8 +977,8 @@ def _enforce_signal_rules(trade_signal: dict, market: dict) -> dict:
 #  后台分析任务
 # =====================================================
 
-async def run_analysis_background(hours_back: int = 48, concurrency: int = 8):
-    """后台任务入口 — 分析最近 hours_back 小时内未处理的新闻（带进度追踪，并发）"""
+async def run_analysis_background(hours_back: int = 48, concurrency: int = 5):
+    """后台任务入口 — 分析最近 hours_back 小时内未处理的新闻（默认5并发，稳定）"""
     import redis.asyncio as aioredis
     logger.info(f"[Analyzer] 后台分析任务启动（最近 {hours_back}h，{concurrency} 并发）...")
     redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
