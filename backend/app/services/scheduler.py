@@ -52,10 +52,9 @@ async def job_fetch_news():
                 f"新增 {result['new_articles']} 条"
             )
 
-            # 有新文章则自动触发分析
             if result["new_articles"] > 0:
-                logger.info("[Scheduler] 🧠 触发自动分析...")
-                await run_analysis_background()
+                logger.info("[Scheduler] 🧠 触发自动分析（最近24h）...")
+                await run_analysis_background(hours_back=24)
 
         await redis.close()
     except Exception as e:
@@ -78,8 +77,8 @@ async def job_fetch_polygon_news():
                 f"新增 {result['new_articles']} 条"
             )
             if result["new_articles"] > 0:
-                logger.info("[Scheduler] 🧠 触发自动分析...")
-                await run_analysis_background()
+                logger.info("[Scheduler] 🧠 触发自动分析（最近24h）...")
+                await run_analysis_background(hours_back=24)
         await redis.close()
     except Exception as e:
         logger.error(f"[Scheduler] ❌ Polygon 新闻采集失败: {e}")
@@ -134,8 +133,8 @@ async def job_fetch_edgar():
             )
 
             if result["new_articles"] > 0:
-                logger.info("[Scheduler] 🧠 触发自动分析...")
-                await run_analysis_background()
+                logger.info("[Scheduler] 🧠 触发自动分析（最近24h）...")
+                await run_analysis_background(hours_back=24)
 
         await redis.close()
     except Exception as e:
@@ -149,7 +148,7 @@ async def job_analyze_pending():
     """
     logger.info("[Scheduler] 🧠 开始定时分析...")
     try:
-        result = await run_analysis_background()
+        result = await run_analysis_background(hours_back=24)
         logger.info(f"[Scheduler] ✅ 分析完成: {result}")
     except Exception as e:
         logger.error(f"[Scheduler] ❌ 分析任务失败: {e}")

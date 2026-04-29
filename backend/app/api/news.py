@@ -141,7 +141,7 @@ async def fetch_polygon_news(
                 result_dict = await fetcher.fetch_all(hours_back=hours_back)
                 new_cnt = result_dict.get("new_articles", 0)
             if auto_analyze and new_cnt > 0:
-                await run_analysis_background()
+                await run_analysis_background(hours_back=24)
 
     background_tasks.add_task(_run)
     return NewsFetchResult(
@@ -175,7 +175,7 @@ async def fetch_rtpr_news(
             fetcher = RTPRFetcher(session=sess, redis=redis)
             result = await fetcher.fetch_all(tickers=tickers)
             if auto_analyze and result.get("new_articles", 0) > 0:
-                await run_analysis_background()
+                await run_analysis_background(hours_back=24)
 
     background_tasks.add_task(_run)
     return NewsFetchResult(
@@ -205,7 +205,7 @@ async def fetch_edgar_news(
     result = await fetcher.fetch_all(tickers=tickers)
 
     if auto_analyze and result["new_articles"] > 0:
-        background_tasks.add_task(run_analysis_background)
+        background_tasks.add_task(run_analysis_background, 24)
 
     return NewsFetchResult(**result)
 
