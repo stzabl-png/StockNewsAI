@@ -81,6 +81,8 @@ from app.api.notify import router as notify_router
 from app.api.sectors import router as sectors_router
 from app.api.market import router as market_router
 from app.api.signals import router as signals_router
+from app.api.trend import router as trend_router
+from app.models.price_history import PriceHistory  # noqa: ensure table is created
 
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
@@ -90,6 +92,7 @@ app.include_router(notify_router, prefix="/api")
 app.include_router(sectors_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
+app.include_router(trend_router, prefix="/api")
 
 # ---- 前端静态文件 ----
 import os

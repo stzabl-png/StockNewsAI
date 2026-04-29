@@ -184,40 +184,55 @@ def _rule_based_signal(
     qqq_change_pct: Optional[float],
     spy_change_pct: Optional[float],
 ) -> str:
-    """规则引擎（L3没给信号时的降级决策）"""
+    """规则引擎（L3没给信号时的降级决策）
+
+    核心阈值：
+        final_score < 40               → AVOID
+        final_score < 50               → AVOID（综合质量不足）
+        final_score 50–64              → WATCH_ONLY（观望）
+        final_score 65–74              → WAIT_FOR_PULLBACK（等待确认）
+        final_score ≥ 75 + event ≥ 80 → BUY_ON_VWAP_HOLD（条件满足才买）
+    """
     gap = premarket_gap_pct or 0.0
     vol = rel_volume or 1.0
     qqq = qqq_change_pct or 0.0
     spy = spy_change_pct or 0.0
-    market_weak = (qqq < -1.0 and spy < -0.8)
+    market_weak = (qqq < -1.0 or spy < -0.8)
 
-    # 完全没有信号：低分直接拒绝
-    if final_score < 40 or event_score < 35:
+    # ── 第一道门：综合分不足直接拒绝 ──────────────────────────
+    if final_score < 50 or event_score < 40:
         return "AVOID"
 
-    # 涨幅极大，追高风险极高
-    if abs(gap) > 20 and event_score >= 75:
+    # ── 第二道门：综合分 50-64 → 只观望 ──────────────────────
+    if final_score < 65:
+        return "WATCH_ONLY"
+
+    # ── 以下 final_score >= 65 ──────────────────────────────
+
+    # 追高保护：盘前涨幅极大
+    if gap > 30:
+        return "WATCH_SYMPATHY"
+    if gap > 20:
         return "WAIT_FOR_PULLBACK"
 
-    # 大盘极弱
+    # 大盘极弱，且事件不够强
     if market_weak and event_score < 80:
         return "WATCH_ONLY"
 
-    # 理想状态：中等gap + 放量 + 事件强
-    if event_score >= 80 and 3 <= gap <= 12 and vol >= 2.5:
+    # BUY 条件：event ≥ 80 + final ≥ 75 + 合理涨幅 + 放量确认
+    if (event_score >= 80 and final_score >= 75
+            and 2 <= gap <= 15 and vol >= 2.0):
         return "BUY_ON_VWAP_HOLD"
 
-    # 事件强但 gap 过大：建议看联动
+    # event ≥ 80 但涨幅过大或量不足
     if event_score >= 80 and gap > 15:
-        return "WATCH_SYMPATHY"
+        return "WAIT_FOR_PULLBACK"
+    if event_score >= 80 and vol < 2.0:
+        return "WAIT_FOR_PULLBACK"
 
-    # 事件中等，成交量不足
-    if event_score >= 60 and vol < 1.5:
-        return "WATCH_ONLY"
-
-    # 事件中等，条件尚可
-    if event_score >= 65 and vol >= 1.5 and not market_weak:
-        return "BUY_ON_VWAP_HOLD"
+    # final ≥ 65 但未达 BUY 门槛
+    if final_score >= 65:
+        return "WAIT_FOR_PULLBACK"
 
     return "WATCH_ONLY"
 

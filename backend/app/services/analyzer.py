@@ -529,8 +529,9 @@ class NewsAnalyzer:
                         ticker=company.ticker,
                         l3_suggested_signal=raw_signal,
                     )
-                    # 硬规则兜底校验
-                    trade_signal = _enforce_signal_rules(trade_signal, mkt_ctx)
+                    # 硬规则兜底校验（注入 final_score 供门控使用）
+                    mkt_ctx_with_score = {**mkt_ctx, "final_score": scores["final_score"]}
+                    trade_signal = _enforce_signal_rules(trade_signal, mkt_ctx_with_score)
 
                     logger.info(
                         f"[Signal] {company.ticker} | "
@@ -841,49 +842,67 @@ class NewsAnalyzer:
 # =====================================================
 
 def _enforce_signal_rules(trade_signal: dict, market: dict) -> dict:
-    """对 L3 输出的信号做最终硬规则兜底校验，避免追涨过大或成交量不足的情况。"""
+    """对 L3 输出的信号做最终硬规则兜底 —— L3 也不能绕过这些规则。"""
     if not trade_signal or not market:
         return trade_signal
 
     signal = trade_signal.copy()
-    gap = market.get("premarket_gap_pct")
+    gap        = market.get("premarket_gap_pct")
     rel_volume = market.get("rel_volume")
     qqq_return = market.get("qqq_change_pct")
-    five_day = market.get("five_day_return_pct")
+    five_day   = market.get("five_day_return_pct")
+    final_score= market.get("final_score", 100)   # 由调用方注入
 
-    sig = signal.get("signal", "")
-    size = signal.get("position_size", "")
+    sig  = signal.get("signal", "")
 
-    # 涨幅过大，禁止直接 BUY_NOW
+    # ── 硬门槛 1：综合分 < 50 → 强制 AVOID ──────────────────
+    if final_score < 50 and sig not in ("AVOID",):
+        signal["signal"] = "AVOID"
+        signal["position_size"] = "none"
+        signal["_rule_override"] = f"final_score={final_score}<50, forced AVOID"
+        return signal
+
+    # ── 硬门槛 2：综合分 < 65 → 最多 WATCH_ONLY ─────────────
+    if final_score < 65 and sig in ("BUY_ON_VWAP_HOLD", "BUY_NOW", "WAIT_FOR_PULLBACK"):
+        signal["signal"] = "WATCH_ONLY"
+        signal["position_size"] = "none"
+        signal["_rule_override"] = f"final_score={final_score}<65, {sig}→WATCH_ONLY"
+
+    # ── 硬门槛 3：盘前 gap > 20% 禁止 BUY_NOW ───────────────
     if gap is not None and gap > 20 and sig == "BUY_NOW":
         signal["signal"] = "WAIT_FOR_PULLBACK"
         signal["position_size"] = "small"
         signal["_rule_override"] = f"gap {gap:.1f}%>20%, BUY_NOW→WAIT_FOR_PULLBACK"
 
-    # 极端涨幅，优先看联动股
+    # ── 硬门槛 4：gap > 30% → 强制看联动 ────────────────────
     if gap is not None and gap > 30:
         signal["signal"] = "WATCH_SYMPATHY"
         signal["position_size"] = "small"
         signal["_rule_override"] = f"gap {gap:.1f}%>30%, forced WATCH_SYMPATHY"
 
-    # 成交量不足，禁止 large
-    if rel_volume is not None and rel_volume < 1.5 and signal.get("position_size") == "large":
+    # ── 硬门槛 5：rel_volume < 3x 不能 large ─────────────────
+    if rel_volume is not None and rel_volume < 3.0 and signal.get("position_size") == "large":
         signal["position_size"] = "medium"
-        signal["_rule_override"] = signal.get("_rule_override", "") + f" | vol {rel_volume:.1f}x<1.5, large→medium"
+        signal["_rule_override"] = (signal.get("_rule_override") or "") + f" | vol {rel_volume:.1f}x<3, large→medium"
 
-    # 大盘弱，降低科技成长股信号
+    # ── 硬门槛 6：rel_volume < 1.5 直接降为 small ────────────
+    if rel_volume is not None and rel_volume < 1.5 and signal.get("position_size") in ("large", "medium"):
+        signal["position_size"] = "small"
+        signal["_rule_override"] = (signal.get("_rule_override") or "") + f" | vol {rel_volume:.1f}x<1.5, pos→small"
+
+    # ── 硬门槛 7：大盘弱 QQQ<-1% 降仓 ──────────────────────
     if qqq_return is not None and qqq_return < -1:
         if signal.get("position_size") == "large":
             signal["position_size"] = "medium"
         elif signal.get("position_size") == "medium":
             signal["position_size"] = "small"
-        signal["_rule_override"] = signal.get("_rule_override", "") + f" | QQQ {qqq_return:.1f}%<-1, size downgraded"
+        signal["_rule_override"] = (signal.get("_rule_override") or "") + f" | QQQ {qqq_return:.1f}%<-1, size↓"
 
-    # 近5日已大涨，降低追高信号
-    if five_day is not None and five_day > 20 and sig == "BUY_NOW":
+    # ── 硬门槛 8：近5日已大涨 → 不追 ────────────────────────
+    if five_day is not None and five_day > 20 and sig in ("BUY_NOW", "BUY_ON_VWAP_HOLD"):
         signal["signal"] = "WAIT_FOR_PULLBACK"
         signal["position_size"] = "small"
-        signal["_rule_override"] = signal.get("_rule_override", "") + f" | 5d +{five_day:.1f}%>20, BUY_NOW→WAIT"
+        signal["_rule_override"] = (signal.get("_rule_override") or "") + f" | 5d +{five_day:.1f}%>20, forced WAIT"
 
     return signal
 
