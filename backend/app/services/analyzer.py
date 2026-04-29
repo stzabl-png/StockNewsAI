@@ -612,6 +612,17 @@ class NewsAnalyzer:
             # OpenAI 账户额度耗尽 → 立即上抛，停止整个 batch
             if "insufficient_quota" in err_str:
                 raise RuntimeError("OPENAI_QUOTA_EXCEEDED: " + err_str)
+            # 429 Rate Limit → 解析 retry-after，等待后重试
+            if "rate_limit_exceeded" in err_str or "429" in err_str:
+                import re
+                wait_match = re.search(r"try again in (\d+\.?\d*)s", err_str)
+                wait_secs = float(wait_match.group(1)) if wait_match else 10.0
+                wait_secs = min(wait_secs + 1, 30)  # 多等1秒缓冲，最多等30s
+                logger.warning(f"[Analyzer] ⏳ 429 Rate Limit，等待 {wait_secs:.1f}s 后跳过本条")
+                import asyncio
+                await asyncio.sleep(wait_secs)
+                # 跳过本条（不是 quota 问题，下次批次会重新分析）
+                return None
             logger.error(f"分析新闻失败: {err_str[:200]}")
             raise RuntimeError(err_str)
 
