@@ -671,11 +671,80 @@ function formatMarketCap(cap) {
 // =====================================================
 //  Analysis
 // =====================================================
+// =====================================================================
+//  AI 分析进度条轮询
+// =====================================================================
+
+let _progressTimer = null;
+
+function _updateProgressWidget(p) {
+    const widget = document.getElementById('analysis-progress-widget');
+    if (!widget) return;
+
+    const isRunning = p.status === 'running';
+    const isDone    = p.status === 'done' || p.total === 0;
+    const isQuota   = p.status === 'quota_exceeded';
+
+    if (!isRunning && !isQuota) {
+        widget.style.display = 'none';
+        return;
+    }
+
+    widget.style.display = 'block';
+
+    const total     = parseInt(p.total) || 1;
+    const completed = parseInt(p.completed) || 0;
+    const pct       = Math.min(100, Math.round((completed / total) * 100));
+
+    document.getElementById('apw-bar').style.width    = pct + '%';
+    document.getElementById('apw-counts').textContent = `${completed} / ${total}  (${pct}%)`;
+    document.getElementById('apw-current').textContent = isQuota
+        ? '⚠️ OpenAI 额度耗尽，请充值后重试'
+        : (p.current ? `▶ ${p.current}` : '');
+    document.getElementById('apw-hi').textContent  = p.high_impact > 0 ? `⚡ ${p.high_impact} 高影响` : '';
+    document.getElementById('apw-err').textContent = p.errors > 0     ? `❌ ${p.errors} 错误`      : '';
+
+    if (isQuota) {
+        document.getElementById('apw-bar').style.background = 'linear-gradient(90deg,#ef4444,#f97316)';
+    }
+}
+
+async function pollAnalysisProgress() {
+    try {
+        const p = await fetch('/api/analysis/progress').then(r => r.json());
+        _updateProgressWidget(p);
+
+        if (p.status === 'running') {
+            // 每 3 秒刷新一次进度
+            _progressTimer = setTimeout(async () => {
+                await pollAnalysisProgress();
+                // 每完成 20 条刷新一次列表
+                const completed = parseInt(p.completed) || 0;
+                if (completed > 0 && completed % 20 === 0) loadAnalysis();
+            }, 3000);
+        } else {
+            // 完成 → 刷新列表 + 隐藏进度条
+            if (p.status === 'done') {
+                setTimeout(() => {
+                    document.getElementById('analysis-progress-widget').style.display = 'none';
+                    loadAnalysis();
+                }, 2000);
+            }
+            _progressTimer = null;
+        }
+    } catch (e) {
+        // 网络错误静默处理
+    }
+}
+
 async function loadAnalysis() {
     const ticker = document.getElementById('analysis-filter-ticker').value;
     const sentiment = document.getElementById('analysis-filter-sentiment').value;
     const impact_level = document.getElementById('analysis-filter-impact').value;
     const container = document.getElementById('analysis-list');
+
+    // 自动启动进度轮询（如果没有在跑）
+    if (!_progressTimer) pollAnalysisProgress();
 
     try {
         const analyses = await API.getAnalysis({ ticker, sentiment, impact_level, limit: 100 });

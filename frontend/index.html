@@ -162,6 +162,23 @@
 
             <!-- ===== AI 分析 ===== -->
             <section id="page-analysis" class="page">
+                <!-- 分析进度条 -->
+                <div id="analysis-progress-widget" style="display:none; margin-bottom:16px; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; padding:14px 18px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                        <span style="font-size:13px; font-weight:600; color:var(--text-primary);">
+                            🤖 AI 分析运行中
+                        </span>
+                        <span id="apw-counts" style="font-size:12px; color:var(--text-muted);"></span>
+                    </div>
+                    <div style="background:var(--bg-secondary); border-radius:6px; height:8px; overflow:hidden; margin-bottom:8px;">
+                        <div id="apw-bar" style="height:100%; background:linear-gradient(90deg,#6366f1,#8b5cf6); border-radius:6px; transition:width 0.6s ease; width:0%;"></div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-muted);">
+                        <span id="apw-current" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                        <span id="apw-hi" style="color:#10b981; white-space:nowrap;"></span>
+                        <span id="apw-err" style="color:#ef4444; white-space:nowrap;"></span>
+                    </div>
+                </div>
                 <div class="filter-bar">
                     <select id="analysis-filter-ticker" class="filter-select" onchange="loadAnalysis()">
                         <option value="">全部公司</option>
