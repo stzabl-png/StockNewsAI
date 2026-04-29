@@ -28,25 +28,48 @@ logger = logging.getLogger(__name__)
 #  Prompt 模板
 # =====================================================
 
-LEVEL1_SYSTEM_PROMPT = """你是一位专业的美股生物医药量化研究分析师。
+LEVEL1_SYSTEM_PROMPT = """你是一位专业的美股多行业量化研究分析师。
 你的任务是快速筛选新闻，判断其是否具有引发股价大幅波动的潜力。
 
-## 事件类型分类标准
+## 全市场强事件（impact_level = "high"）
 
-### 强事件（impact_level = "high"）
+### 财报/指引类
+- 财报大幅超预期（EPS/营收超预期≥+10%）
+- 上调全年指引（黄金组合）
+- 下调全年指引（明确利空信号）
+
+### AI / 数据中心类
+- 明确大型 AI / 数据中心订单（具体金额）
+- 主要云厂商 AI 训练计划/投资
+- 数据中心需求激增/供应紧张
+
+### 半导体 / 光通信
+- 产品生命周期转折点（内存/存储/光芯片供应紧张）
+- 主要平台订单超预期（半导体采购奇迹）
+- 技术跨代产品发布（GPU/光芯片）
+
+### 并购/私有化
+- 并购收购（溢价≥±30%）
+- 私有化/分拆传言
+
+### 生物医药类（保留）
 - Phase 3 顶线结果（成功或失败）
 - Phase 2 中期数据（明确超预期或不及预期）
 - FDA 批准 / CRL（完整回复函）/ AdCom 投票结果
-- 并购收购（溢价 ≥ 30%）
 
-### 中间层事件（impact_level = "medium"）
-- 剂量确定（dose-response 明确成立或失败）
-- 试验设计变化（endpoint / population / 统计方法改变）
-- 监管路径变化（要求新试验 / 数据不足）
-- 关键安全性问题（SAE / 临床暂停）
-- 大型合作/授权协议
+### 政策/关税
+- 重大关税政策变化（影响具体行业）
+- 大型政府合同订单（防务/基础设施）
 
-### 低影响事件（impact_level = "low"）
+## 中间层事件（impact_level = "medium"）
+- 小幅超预期财报（没有指引上调）
+- 分析师上调/下调评级（告价调整）
+- 大型商业合作/授权协议
+- 内部人员大量买入
+- 产品涨价宣布（市场尚不确定）
+- 生物医药: 剂量确定/试验设计变化/监管路径变化/关键安全性问题
+
+## 低影响事件（impact_level = "low"）
 - 一般行业评论、市场分析文章
 - 人事变动、会议参与
 - 常规业务更新
@@ -67,6 +90,7 @@ LEVEL1_SYSTEM_PROMPT = """你是一位专业的美股生物医药量化研究分
 只返回 JSON，不要任何其他文字、markdown 格式或代码块。"""
 
 LEVEL1_USER_TEMPLATE = """公司: {ticker} ({company_name})
+板块: {gics_sector}
 新闻标题: {title}
 新闻内容: {content}
 
@@ -76,9 +100,10 @@ LEVEL1_USER_TEMPLATE = """公司: {ticker} ({company_name})
   "confidence": 0.0到1.0,
   "impact_level": "high 或 medium 或 low",
   "impact_duration": "short_term 或 medium_term 或 long_term",
-  "category": "phase3_data/phase2_data/fda_decision/merger_acquisition/safety_event/trial_design_change/regulatory_change/dose_response/partnership/analyst_rating/general",
+  "category": "事件类型，从以下当中选择最匹配的一个: earnings_beat / earnings_miss / guidance_raise / guidance_cut / ai_datacenter_order / ai_partnership_major / supply_chain_tightness / price_increase / price_cut / phase3_data / phase2_data / fda_decision / merger_acquisition / mna_rumor / government_contract / defense_award / tariff_impact / analyst_upgrade / analyst_downgrade / insider_buying / short_squeeze / product_launch / product_recall / safety_event / trial_design_change / regulatory_change / dose_response / major_partnership / general_partnership / sec_filing_unusual / general",
   "company_type": "A_small 或 B_large 或 other",
   "event_strength": "strong 或 intermediate 或 weak",
+  "sector_tag": "该公司所属赛道类型，如: AI基础设施/半导体/存储/光通信/生物医药/能源/防务/金融/消费/工业",
   "summary_cn": "一句话中文摘要",
   "pass_filter": true或false（是否值得进一步分析）
 }}"""
@@ -567,13 +592,14 @@ class NewsAnalyzer:
     # =================================================
 
     async def _level1_screen(self, news: News, company) -> Optional[dict]:
-        """GPT-4o-mini 初筛 — 事件分类 + 公司分类 + 过滤"""
+        """GPT-4o-mini 初筛 — 全市场事件分类 + 公司分类 + 过滤"""
         if not self.openai_client:
             raise RuntimeError("L1 缺少 OpenAI API Key")
 
         user_msg = LEVEL1_USER_TEMPLATE.format(
             ticker=company.ticker,
             company_name=company.name,
+            gics_sector=company.gics_sector or company.sector or "未分类",
             title=news.title,
             content=(news.content or news.summary or news.title)[:4000],
         )

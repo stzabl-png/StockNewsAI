@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QuantNews — 美股生物医药新闻智能分析</title>
-    <meta name="description" content="QuantNews — 7×24小时美股生物医药新闻智能分析平台">
+    <title>QuantNews — 美股事件驱动交易信号</title>
+    <meta name="description" content="QuantNews — 7×24小时美股多行业事件驱动交易信号平台，提供盘前Scanner、AI分析、行情验证">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -22,6 +22,10 @@
                 <span class="logo-text">Quant<span class="logo-ai">News</span></span>
             </div>
             <nav class="sidebar-nav">
+                <a href="#" class="nav-item" data-page="scanner">
+                    <span class="nav-icon">🎯</span>
+                    <span class="nav-label">盘前Scanner</span>
+                </a>
                 <a href="#" class="nav-item active" data-page="dashboard">
                     <span class="nav-icon">📊</span>
                     <span class="nav-label">Home</span>
@@ -37,6 +41,10 @@
                 <a href="#" class="nav-item" data-page="analysis">
                     <span class="nav-icon">🔍</span>
                     <span class="nav-label">AI 分析</span>
+                </a>
+                <a href="#" class="nav-item" data-page="backtest">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-label">回测</span>
                 </a>
                 <a href="#" class="nav-item" data-page="watchlist">
                     <span class="nav-icon">📋</span>
@@ -79,6 +87,49 @@
 
             <!-- ===== 内容区 ===== -->
             <main id="main-content">
+
+            <!-- ===== 盘前 Scanner ===== -->
+            <section id="page-scanner" class="page">
+                <div class="scanner-header">
+                    <div class="scanner-title-row">
+                        <div>
+                            <h1 class="scanner-title">🎯 盘前 Scanner</h1>
+                            <p class="scanner-subtitle" id="scanner-date-label">加载中...</p>
+                        </div>
+                        <div class="scanner-actions">
+                            <button class="btn btn-ghost btn-sm" onclick="refreshScanner()" id="btn-scanner-refresh">🔄 刷新</button>
+                            <button class="btn btn-primary btn-sm" onclick="triggerFetch(); setTimeout(refreshScanner, 3000)">⚡ 抓取+刷新</button>
+                        </div>
+                    </div>
+                    <!-- 统计徽章 -->
+                    <div class="scanner-badges" id="scanner-badges">
+                        <span class="sbadge sbadge-total" id="sbadge-total">-- 条信号</span>
+                        <span class="sbadge sbadge-buy" id="sbadge-buy">✅ BUY 0</span>
+                        <span class="sbadge sbadge-wait" id="sbadge-wait">⏳ WAIT 0</span>
+                        <span class="sbadge sbadge-watch" id="sbadge-watch">👁 WATCH 0</span>
+                        <span class="sbadge sbadge-avoid" id="sbadge-avoid">❌ AVOID 0</span>
+                    </div>
+                    <!-- 筛选栏 -->
+                    <div class="scanner-filters">
+                        <button class="sfil active" data-signal="" onclick="filterScanner(this, '')">全部</button>
+                        <button class="sfil" data-signal="BUY_ON_VWAP_HOLD" onclick="filterScanner(this, 'BUY_ON_VWAP_HOLD')">✅ BUY/VWAP</button>
+                        <button class="sfil" data-signal="WAIT_FOR_PULLBACK" onclick="filterScanner(this, 'WAIT_FOR_PULLBACK')">⏳ 等回踩</button>
+                        <button class="sfil" data-signal="WATCH_SYMPATHY" onclick="filterScanner(this, 'WATCH_SYMPATHY')">🔗 联动股</button>
+                        <button class="sfil" data-signal="WATCH_ONLY" onclick="filterScanner(this, 'WATCH_ONLY')">👁 观望</button>
+                        <button class="sfil" data-signal="AVOID" onclick="filterScanner(this, 'AVOID')">❌ 避开</button>
+                        <select class="filter-select" id="scanner-min-score" onchange="refreshScanner()" style="margin-left:auto;height:32px;">
+                            <option value="50">综合分 ≥ 50</option>
+                            <option value="60">综合分 ≥ 60</option>
+                            <option value="70" selected>综合分 ≥ 70</option>
+                            <option value="80">综合分 ≥ 80</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- 信号卡片列表 -->
+                <div id="scanner-list" class="scanner-list">
+                    <div class="loading-placeholder">加载盘前信号...</div>
+                </div>
+            </section>
 
             <!-- ===== Dashboard 概览 ===== -->
             <section id="page-dashboard" class="page active">
@@ -130,6 +181,17 @@
                 </div>
                 <div id="analysis-list" class="analysis-list">
                     <div class="loading-placeholder">加载中...</div>
+                </div>
+            </section>
+
+            <!-- ===== 回测统计 ===== -->
+            <section id="page-backtest" class="page">
+                <div class="backtest-header">
+                    <h1 class="scanner-title">📈 历史胜率回测</h1>
+                    <p class="scanner-subtitle">基于已发生事件的实际价格结果验证 AI 预测质量</p>
+                </div>
+                <div id="backtest-content">
+                    <div class="loading-placeholder">加载回测数据...</div>
                 </div>
             </section>
 

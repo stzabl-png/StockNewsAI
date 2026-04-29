@@ -135,12 +135,14 @@ function navigateTo(page) {
 
 function loadPageData(page) {
     switch (page) {
+        case 'scanner':   loadScannerPage(); break;
         case 'dashboard': loadDashboard(); break;
-        case 'latest': loadLatest(); break;
+        case 'latest':    loadLatest(); break;
         case 'categories': loadCategories(); break;
-        case 'analysis': loadAnalysis(); break;
+        case 'analysis':  loadAnalysis(); break;
+        case 'backtest':  loadBacktestPage(); break;
         case 'watchlist': loadWatchlist(); break;
-        case 'system': loadSystem(); break;
+        case 'system':    loadSystem(); break;
     }
 }
 
@@ -1507,5 +1509,282 @@ function openCompanyNews(ticker, companyName) {
             if (inp) inp.value = ticker;
             loadNews(ticker);
         }, 100);
+    }
+}
+
+// =====================================================================
+//  盘前 Scanner — P5
+// =====================================================================
+
+let _scannerData = [];    // 当前加载的信号数据（全量，用于前端筛选）
+let _scannerFilter = '';  // 当前激活的信号类型筛选
+
+async function loadScannerPage() {
+    document.getElementById('scanner-date-label').textContent =
+        '正在加载 ' + new Date().toLocaleString('zh-CN', { timeZone: 'America/New_York', hour12: false }) + ' ET';
+    await refreshScanner();
+}
+
+async function refreshScanner() {
+    const list = document.getElementById('scanner-list');
+    if (!list) return;
+    list.innerHTML = '<div class="loading-placeholder">拉取最新信号...</div>';
+
+    const minScore = document.getElementById('scanner-min-score')?.value || 50;
+
+    try {
+        const res = await fetch(`/api/signals/today?min_final_score=${minScore}&min_event_score=40&limit=50`);
+        const data = await res.json();
+        _scannerData = data.signals || [];
+        _updateScannerBadges(_scannerData);
+        _renderScannerList(_scannerData, _scannerFilter);
+
+        const now = new Date().toLocaleString('zh-CN', { timeZone: 'America/New_York', hour12: false });
+        document.getElementById('scanner-date-label').textContent =
+            `今日信号（美东时间 ${now}）｜共 ${_scannerData.length} 条`;
+
+    } catch (e) {
+        list.innerHTML = `<div class="loading-placeholder" style="color:var(--bearish)">加载失败: ${e.message}</div>`;
+    }
+}
+
+function filterScanner(btn, signal) {
+    document.querySelectorAll('.sfil').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _scannerFilter = signal;
+    _renderScannerList(_scannerData, signal);
+}
+
+function _updateScannerBadges(signals) {
+    const counts = { BUY_ON_VWAP_HOLD: 0, WAIT_FOR_PULLBACK: 0, WATCH_ONLY: 0, WATCH_SYMPATHY: 0, AVOID: 0 };
+    signals.forEach(s => { if (counts[s.signal] !== undefined) counts[s.signal]++; });
+
+    document.getElementById('sbadge-total').textContent = `${signals.length} 条信号`;
+    document.getElementById('sbadge-buy').textContent   = `✅ BUY ${counts.BUY_ON_VWAP_HOLD}`;
+    document.getElementById('sbadge-wait').textContent  = `⏳ WAIT ${counts.WAIT_FOR_PULLBACK}`;
+    document.getElementById('sbadge-watch').textContent = `👁 WATCH ${counts.WATCH_ONLY + counts.WATCH_SYMPATHY}`;
+    document.getElementById('sbadge-avoid').textContent = `❌ AVOID ${counts.AVOID}`;
+}
+
+function _renderScannerList(signals, filter) {
+    const list = document.getElementById('scanner-list');
+    const filtered = filter ? signals.filter(s => s.signal === filter) : signals;
+
+    if (!filtered.length) {
+        list.innerHTML = '<div class="loading-placeholder">暂无符合条件的信号（尝试降低综合分门槛）</div>';
+        return;
+    }
+
+    list.innerHTML = filtered.map((s, idx) => _buildSignalCard(s, idx)).join('');
+}
+
+function _fmt(val, suffix = '', decimals = 1, na = '—') {
+    if (val == null || val === undefined) return na;
+    return `${parseFloat(val).toFixed(decimals)}${suffix}`;
+}
+
+function _signalLabelClass(signal) {
+    return `slabel-${signal || 'AVOID'}`;
+}
+
+function _buildSignalCard(s, idx) {
+    const signal = s.signal || 'AVOID';
+    const scores = { event: s.event_score, market: s.market_score, risk: s.risk_score, final: s.final_score };
+    const mkt = s.market || {};
+
+    // 行情数据行
+    const mktParts = [];
+    if (mkt.premarket_gap_pct != null) {
+        const cls = mkt.premarket_gap_pct > 0 ? 'pos' : 'neg';
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">盘前涨幅</span><span class="mkt-val ${cls}">${mkt.premarket_gap_pct > 0 ? '+' : ''}${_fmt(mkt.premarket_gap_pct, '%')}</span></span>`);
+    }
+    if (mkt.rel_volume != null) {
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">相对成交量</span><span class="mkt-val">${_fmt(mkt.rel_volume, 'x')}</span></span>`);
+    }
+    if (mkt.spy_change_pct != null) {
+        const cls = mkt.spy_change_pct > 0 ? 'pos' : 'neg';
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">SPY</span><span class="mkt-val ${cls}">${mkt.spy_change_pct > 0 ? '+' : ''}${_fmt(mkt.spy_change_pct, '%')}</span></span>`);
+    }
+    if (mkt.qqq_change_pct != null) {
+        const cls = mkt.qqq_change_pct > 0 ? 'pos' : 'neg';
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">QQQ</span><span class="mkt-val ${cls}">${mkt.qqq_change_pct > 0 ? '+' : ''}${_fmt(mkt.qqq_change_pct, '%')}</span></span>`);
+    }
+    if (mkt.current_price != null) {
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">价格</span><span class="mkt-val">$${_fmt(mkt.current_price, '', 2)}</span></span>`);
+    }
+    if (mkt.vwap != null) {
+        mktParts.push(`<span class="mkt-item"><span class="mkt-label">VWAP</span><span class="mkt-val">$${_fmt(mkt.vwap, '', 2)}</span></span>`);
+    }
+
+    // 联动股标签
+    const sympathy = (s.sympathy_tickers || []).slice(0, 5).map(t =>
+        `<span class="sympathy-tag" onclick="openChartModal('${t}')">${t}</span>`
+    ).join('');
+    const etfs = (s.sector_etfs || []).map(t =>
+        `<span class="sympathy-tag etf-tag">${t}</span>`
+    ).join('');
+
+    const publishedAt = s.published_at ? new Date(s.published_at).toLocaleString('zh-CN', { timeZone: 'America/New_York' }) : '';
+
+    return `
+<div class="signal-card sig-${signal}" id="sc-${idx}">
+    <div class="signal-card-header">
+        <div class="signal-ticker-block">
+            <span class="signal-ticker" onclick="openChartModal('${s.ticker}')">${s.ticker}</span>
+            <span class="signal-company" title="${s.company_name}">${s.company_name}</span>
+        </div>
+        <div class="signal-main">
+            <div class="signal-top-row">
+                <span class="signal-label ${_signalLabelClass(signal)}">${s.signal_label || signal}</span>
+                ${s.conviction_level ? `<span class="badge badge-level">${s.conviction_level}</span>` : ''}
+                ${s.sentiment === 'bullish' ? '<span class="badge badge-bullish">🟢 利好</span>' : s.sentiment === 'bearish' ? '<span class="badge badge-bearish">🔴 利空</span>' : ''}
+                <span style="font-size:10px;color:var(--text-muted);margin-left:auto">${publishedAt}</span>
+            </div>
+            <div class="signal-headline">${s.news_title}</div>
+            ${s.summary_cn ? `<div class="signal-summary">${s.summary_cn}</div>` : ''}
+        </div>
+    </div>
+
+    <!-- 四维评分 -->
+    <div class="signal-scores">
+        <span style="font-size:10px;color:var(--text-muted);font-weight:600">评分</span>
+        <div class="score-pill sp-event"><span class="s-label">事件</span><span class="s-value">${scores.event ?? '—'}</span></div>
+        <div class="score-pill sp-market"><span class="s-label">行情</span><span class="s-value">${scores.market ?? '—'}</span></div>
+        <div class="score-pill sp-risk"><span class="s-label">风险</span><span class="s-value">${scores.risk ?? '—'}</span></div>
+        <div class="score-pill sp-final"><span class="s-label">综合</span><span class="s-value">${scores.final ?? '—'}</span></div>
+        ${s.price_move_estimate ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">预期波幅: <strong>${s.price_move_estimate}</strong></span>` : ''}
+    </div>
+
+    <!-- 行情数据 -->
+    ${mktParts.length ? `<div class="signal-market-row">${mktParts.join('')}</div>` : ''}
+
+    <!-- 展开按钮 -->
+    <button class="signal-expand-btn" onclick="_toggleSignalRules(${idx})">
+        <span>📋 交易规则 / 联动股</span>
+        <span id="sc-arrow-${idx}">▼</span>
+    </button>
+
+    <!-- 交易规则展开区 -->
+    <div class="signal-rules" id="sc-rules-${idx}">
+        ${s.entry_rule ? `<div class="rule-row"><span class="rule-icon">🎯</span><span class="rule-text"><strong>入场：</strong>${s.entry_rule}</span></div>` : ''}
+        ${s.stop_loss_rule ? `<div class="rule-row"><span class="rule-icon">🛡️</span><span class="rule-text"><strong>止损：</strong>${s.stop_loss_rule}</span></div>` : ''}
+        ${s.reason_cn ? `<div class="rule-row"><span class="rule-icon">💡</span><span class="rule-text">${s.reason_cn}</span></div>` : ''}
+        ${s.action_suggestion ? `<div class="rule-row"><span class="rule-icon">📌</span><span class="rule-text">${s.action_suggestion}</span></div>` : ''}
+        ${(sympathy || etfs) ? `
+        <div class="sympathy-row">
+            <span class="sympathy-label">联动标的：</span>
+            ${sympathy}
+            ${etfs}
+        </div>` : ''}
+    </div>
+</div>`;
+}
+
+function _toggleSignalRules(idx) {
+    const rules = document.getElementById(`sc-rules-${idx}`);
+    const arrow = document.getElementById(`sc-arrow-${idx}`);
+    if (!rules) return;
+    rules.classList.toggle('open');
+    arrow.textContent = rules.classList.contains('open') ? '▲' : '▼';
+}
+
+// =====================================================================
+//  回测统计页面 — P4
+// =====================================================================
+
+async function loadBacktestPage() {
+    const container = document.getElementById('backtest-content');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-placeholder">加载回测数据...</div>';
+
+    try {
+        const res = await fetch('/api/signals/backtest/stats');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        if (!data.total) {
+            container.innerHTML = `
+            <div class="backtest-empty">
+                <div class="empty-icon">📊</div>
+                <p>暂无完整回测数据。<br>系统会在每个交易日收盘后（美东21:00）自动回填价格数据。<br>至少需要5个交易日才能生成第一批完整统计。</p>
+            </div>`;
+            return;
+        }
+
+        container.innerHTML = `
+        <!-- 整体胜率统计 -->
+        <div class="backtest-stats-grid">
+            <div class="bt-stat">
+                <span class="bt-val neutral">${data.total}</span>
+                <span class="bt-label">总事件数</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val ${data.win_rate_day1 >= 50 ? 'pos' : 'neg'}">${data.win_rate_day1}%</span>
+                <span class="bt-label">第1日胜率</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val ${data.win_rate_day5 >= 50 ? 'pos' : 'neg'}">${data.win_rate_day5}%</span>
+                <span class="bt-label">第5日胜率</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val ${(data.avg_return_day1 || 0) >= 0 ? 'pos' : 'neg'}">${data.avg_return_day1 != null ? data.avg_return_day1 + '%' : '—'}</span>
+                <span class="bt-label">平均第1日收益</span>
+            </div>
+        </div>
+        <div class="backtest-stats-grid">
+            <div class="bt-stat">
+                <span class="bt-val neg">${data.gap_fade_rate}%</span>
+                <span class="bt-label">高开低走率</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val pos">${data.continuation_rate}%</span>
+                <span class="bt-label">开盘续涨率</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val ${(data.avg_return_day5 || 0) >= 0 ? 'pos' : 'neg'}">${data.avg_return_day5 != null ? data.avg_return_day5 + '%' : '—'}</span>
+                <span class="bt-label">平均5日收益</span>
+            </div>
+            <div class="bt-stat">
+                <span class="bt-val neutral">${((data.total - (data.total * data.win_rate_day1 / 100)) | 0)}</span>
+                <span class="bt-label">亏损事件数</span>
+            </div>
+        </div>
+
+        <!-- 按事件类型统计 -->
+        <div class="backtest-table-section">
+            <h3>📋 按事件类型统计</h3>
+            <table class="bt-table">
+                <thead><tr><th>事件类型</th><th>事件数</th><th>第1日胜率</th><th>平均第1日收益</th></tr></thead>
+                <tbody>
+                ${(data.by_category || []).map(row => `
+                <tr>
+                    <td class="cat-name">${row.category}</td>
+                    <td>${row.count}</td>
+                    <td class="win-rate-cell ${row.win_rate_d1 >= 55 ? 'high' : row.win_rate_d1 < 45 ? 'low' : ''}">${row.win_rate_d1}%</td>
+                    <td class="${row.avg_return_d1 >= 0 ? 'bt-val pos' : 'bt-val neg'}" style="font-size:12px">${row.avg_return_d1 > 0 ? '+' : ''}${row.avg_return_d1}%</td>
+                </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 按信号类型统计 -->
+        <div class="backtest-table-section">
+            <h3>🎯 按信号类型统计</h3>
+            <table class="bt-table">
+                <thead><tr><th>信号类型</th><th>事件数</th><th>第1日胜率</th><th>平均第1日收益</th></tr></thead>
+                <tbody>
+                ${(data.by_signal || []).map(row => `
+                <tr>
+                    <td class="cat-name">${row.signal}</td>
+                    <td>${row.count}</td>
+                    <td class="win-rate-cell ${row.win_rate_d1 >= 55 ? 'high' : row.win_rate_d1 < 45 ? 'low' : ''}">${row.win_rate_d1}%</td>
+                    <td class="${row.avg_return_d1 >= 0 ? 'bt-val pos' : 'bt-val neg'}" style="font-size:12px">${row.avg_return_d1 > 0 ? '+' : ''}${row.avg_return_d1}%</td>
+                </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>`;
+
+    } catch (e) {
+        container.innerHTML = `<div class="loading-placeholder" style="color:var(--bearish)">加载失败: ${e.message}</div>`;
     }
 }

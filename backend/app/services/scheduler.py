@@ -22,6 +22,7 @@ from app.services.fetchers.edgar import EDGARFetcher
 from app.services.fetchers.polygon_news import PolygonNewsFetcher
 from app.services.fetchers.polygon_market import PolygonMarketFetcher
 from app.services.analyzer import run_analysis_background
+from app.services.backtester import run_backtest_fill
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,19 @@ async def job_fetch_market_snapshots():
             await fetcher.close()
     except Exception as e:
         logger.error(f"[Scheduler] ❌ 行情快照任务失败: {e}")
+
+
+async def job_backtest_fill():
+    """
+    回测价格回填 — 美东 21:00（收盘后4小时）执行
+    为所有 HIGH 影响事件回填后续价格表现数据
+    """
+    logger.info("[Scheduler] 📈 开始回测数据回填...")
+    try:
+        result = await run_backtest_fill()
+        logger.info(f"[Scheduler] ✅ 回测回填完成: {result}")
+    except Exception as e:
+        logger.error(f"[Scheduler] ❌ 回测回填任务失败: {e}")
 
 
 async def job_fetch_edgar():
@@ -252,8 +266,18 @@ def init_scheduler():
         max_instances=1,
     )
 
+    # 7. 回测价格回填 — 美东 21:00（收盘后4小时）
+    scheduler.add_job(
+        job_backtest_fill,
+        trigger=CronTrigger(hour=21, minute=0, timezone="America/New_York"),
+        id="backtest_fill",
+        name="📈 回测数据回填",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     scheduler.start()
-    logger.info("[Scheduler] ⏰ 调度器已启动，已注册 6 个定时任务")
+    logger.info("[Scheduler] ⏰ 调度器已启动，已注册 7 个定时任务")
 
 
 def get_jobs_info() -> list[dict]:

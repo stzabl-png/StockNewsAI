@@ -7,6 +7,7 @@ from app.models.analysis import Analysis
 from app.models.trial import ClinicalTrial
 from app.models.catalyst import Catalyst
 from app.models.sector import Sector, SubSector, Concept
+from app.models.event_outcome import EventOutcome
 
 __all__ = [
     "Company",
@@ -17,4 +18,5 @@ __all__ = [
     "Sector",
     "SubSector",
     "Concept",
+    "EventOutcome",
 ]

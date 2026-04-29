@@ -1,9 +1,3 @@
-"""
-交易信号 API
-- GET /api/signals/today       → 今日所有高分交易信号（按 final_score 排序）
-- GET /api/signals/{news_id}   → 单条新闻的信号详情（实时重算）
-- GET /api/signals/ticker/{ticker} → 指定股票的最新信号
-"""
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -288,3 +282,32 @@ async def get_ticker_latest_signal(
         "days": days,
         "signals": signals,
     }
+
+
+# ── GET /api/signals/backtest/stats ───────────────────────────────────────────
+
+@router.get("/signals/backtest/stats")
+async def get_backtest_stats():
+    """
+    返回历史回测统计数据（整体胜率、按事件类型、按信号类型）。
+    数据由每日收盘后的定时任务自动填充。
+    """
+    from app.services.backtester import BacktestService
+    async with async_session() as db:
+        svc = BacktestService(session=db)
+        stats = await svc.get_backtest_stats()
+        await svc.close()
+    return stats
+
+
+# ── POST /api/signals/backtest/fill ───────────────────────────────────────────
+
+@router.post("/signals/backtest/fill")
+async def trigger_backtest_fill():
+    """手动触发回测价格回填（通常由收盘定时任务自动执行）"""
+    from app.services.backtester import run_backtest_fill
+    try:
+        result = await run_backtest_fill()
+        return {"status": "ok", **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
