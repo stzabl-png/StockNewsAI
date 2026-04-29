@@ -1530,10 +1530,10 @@ async function refreshScanner() {
     if (!list) return;
     list.innerHTML = '<div class="loading-placeholder">拉取最新信号...</div>';
 
-    const minScore = document.getElementById('scanner-min-score')?.value || 50;
+    const minScore = document.getElementById('scanner-min-score')?.value ?? 0;
 
     try {
-        const res = await fetch(`/api/signals/today?min_final_score=${minScore}&min_event_score=40&limit=50`);
+        const res = await fetch(`/api/signals/today?min_final_score=${minScore}&min_event_score=0&limit=100`);
         const data = await res.json();
         _scannerData = data.signals || [];
         _updateScannerBadges(_scannerData);

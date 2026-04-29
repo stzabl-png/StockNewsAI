@@ -118,9 +118,10 @@
                         <button class="sfil" data-signal="WATCH_ONLY" onclick="filterScanner(this, 'WATCH_ONLY')">👁 观望</button>
                         <button class="sfil" data-signal="AVOID" onclick="filterScanner(this, 'AVOID')">❌ 避开</button>
                         <select class="filter-select" id="scanner-min-score" onchange="refreshScanner()" style="margin-left:auto;height:32px;">
-                            <option value="50">综合分 ≥ 50</option>
+                            <option value="0" selected>综合分 全部</option>
+                            <option value="20">综合分 ≥ 20</option>
+                            <option value="40">综合分 ≥ 40</option>
                             <option value="60">综合分 ≥ 60</option>
-                            <option value="70" selected>综合分 ≥ 70</option>
                             <option value="80">综合分 ≥ 80</option>
                         </select>
                     </div>
