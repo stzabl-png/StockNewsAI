@@ -3,7 +3,7 @@
 """
 from datetime import date
 from sqlalchemy import Column, Integer, String, Float, Date, UniqueConstraint, Index
-from app.models.base import Base
+from app.database import Base
 
 
 class PriceHistory(Base):
