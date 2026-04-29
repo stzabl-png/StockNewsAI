@@ -27,3 +27,4 @@ class NewsFetchResult(BaseModel):
     total_fetched: int
     new_articles: int
     errors: list[str] = []
+    message: Optional[str] = None

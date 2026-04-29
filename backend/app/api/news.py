@@ -116,42 +116,40 @@ async def fetch_polygon_news(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    手动触发 Polygon.io 新闻采集（主力数据源）
-    - 覆盖所有 Watchlist 活跃公司
-    - 支持按 ticker 单独采集
-    - 自动打板块 + 概念标签
+    手动触发 Polygon.io 新闻采集（主力数据源）—— 后台运行，立即返回
     """
     from app.services.fetchers.polygon_news import PolygonNewsFetcher
+    from app.database import async_session
 
     redis = getattr(request.app.state, "redis", None)
-    fetcher = PolygonNewsFetcher(session=db, redis=redis)
 
-    if ticker:
-        result = await db.execute(
-            select(Company).where(Company.ticker == ticker.upper())
-        )
-        company = result.scalar_one_or_none()
-        if not company:
-            raise HTTPException(status_code=404, detail=f"股票 {ticker} 不在 Watchlist 中")
-        stat = await fetcher.fetch_ticker(company, hours_back=hours_back)
-        await db.commit()
-        result_dict = {
-            "companies_processed": 1,
-            "total_fetched": stat["fetched"],
-            "new_articles": stat["new"],
-            "errors": 1 if stat["error"] else 0,
-        }
-    else:
-        result_dict = await fetcher.fetch_all(hours_back=hours_back)
+    async def _run():
+        async with async_session() as sess:
+            fetcher = PolygonNewsFetcher(session=sess, redis=redis)
+            if ticker:
+                result2 = await sess.execute(
+                    select(Company).where(Company.ticker == ticker.upper())
+                )
+                company = result2.scalar_one_or_none()
+                if company:
+                    stat = await fetcher.fetch_ticker(company, hours_back=hours_back)
+                    await sess.commit()
+                    new_cnt = stat.get("new", 0)
+                else:
+                    new_cnt = 0
+            else:
+                result_dict = await fetcher.fetch_all(hours_back=hours_back)
+                new_cnt = result_dict.get("new_articles", 0)
+            if auto_analyze and new_cnt > 0:
+                await run_analysis_background()
 
-    if auto_analyze and result_dict["new_articles"] > 0:
-        background_tasks.add_task(run_analysis_background)
-
+    background_tasks.add_task(_run)
     return NewsFetchResult(
-        companies_processed=result_dict["companies_processed"],
-        total_fetched=result_dict["total_fetched"],
-        new_articles=result_dict["new_articles"],
-        errors=[f"{result_dict['errors']} failed"] if result_dict.get("errors") else [],
+        companies_processed=0,
+        total_fetched=0,
+        new_articles=0,
+        errors=[],
+        message="采集任务已在后台启动，请稍后查看日志",
     )
 
 
@@ -164,18 +162,29 @@ async def fetch_rtpr_news(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    手动触发 RTPR 一手新闻稿采集
+    手动触发 RTPR 一手新闻稿采集 —— 后台运行，立即返回
     """
     from app.services.fetchers.rtpr import RTPRFetcher
+    from app.database import async_session
 
+    redis = getattr(request.app.state, "redis", None)
     tickers = [ticker] if ticker else None
-    fetcher = RTPRFetcher(session=db, redis=request.app.state.redis)
-    result = await fetcher.fetch_all(tickers=tickers)
 
-    if auto_analyze and result["new_articles"] > 0:
-        background_tasks.add_task(run_analysis_background)
+    async def _run():
+        async with async_session() as sess:
+            fetcher = RTPRFetcher(session=sess, redis=redis)
+            result = await fetcher.fetch_all(tickers=tickers)
+            if auto_analyze and result.get("new_articles", 0) > 0:
+                await run_analysis_background()
 
-    return NewsFetchResult(**result)
+    background_tasks.add_task(_run)
+    return NewsFetchResult(
+        companies_processed=0,
+        total_fetched=0,
+        new_articles=0,
+        errors=[],
+        message="RTPR 采集已在后台启动，请稍后查看日志",
+    )
 
 
 @router.post("/fetch/edgar", response_model=NewsFetchResult)

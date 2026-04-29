@@ -120,13 +120,23 @@ class RTPRFetcher:
                 await self.session.commit()
 
             except httpx.HTTPStatusError as e:
-                error_msg = f"{company.ticker}: HTTP {e.response.status_code}"
-                logger.error(f"[RTPR] {error_msg}")
-                errors.append(error_msg)
+                if e.response.status_code == 429:
+                    logger.warning(f"[RTPR] {company.ticker}: 429 限速，等待 60s 后继续...")
+                    import asyncio
+                    await asyncio.sleep(60)
+                    errors.append(f"{company.ticker}: 429 rate limited")
+                else:
+                    error_msg = f"{company.ticker}: HTTP {e.response.status_code}"
+                    logger.error(f"[RTPR] {error_msg}")
+                    errors.append(error_msg)
             except Exception as e:
                 error_msg = f"{company.ticker}: {str(e)}"
                 logger.error(f"[RTPR] {error_msg}")
                 errors.append(error_msg)
+
+            # ── 限速：每次请求之间等待 0.5s（RTPR 免费套餐约 2 req/s）──────────
+            import asyncio
+            await asyncio.sleep(0.5)
 
         return {
             "companies_processed": len(companies),
