@@ -186,7 +186,7 @@ B类（大公司）: 市值>50B, 涉及≥10B市场, 涉及核心管线
 LEVEL3_USER_TEMPLATE = """## 事件信息
 - 公司: {ticker} ({company_name})
 - 板块: {sector}
-- 治疗领域: {therapeutic_area}
+- 治疗领域/行业: {therapeutic_area}
 - 新闻标题: {title}
 - 新闻内容: {content}
 
@@ -198,6 +198,8 @@ LEVEL3_USER_TEMPLATE = """## 事件信息
 - 公司类型: {company_type}
 - 事件强度: {event_strength}
 - 初步摘要: {summary_cn}
+
+{market_context_section}
 
 ## 请按六步框架评估，返回以下 JSON:
 {{
@@ -232,14 +234,22 @@ LEVEL3_USER_TEMPLATE = """## 事件信息
     "reasoning": "影响范围分析"
   }},
   "step5_market_env": {{
-    "needs_market_data": true,
+    "passed": true或false,
     "is_hot_sector": true或false,
     "sector_name": "赛道名称",
-    "preliminary_assessment": "基于已知信息的初步判断"
+    "premarket_gap_assessment": "基于实际盘前涨幅的判断",
+    "volume_assessment": "基于实际成交量数据的判断",
+    "macro_env_assessment": "基于实际SPY/QQQ数据的大盘环境判断",
+    "preliminary_assessment": "step5综合判断"
   }},
   "step6_trading_trigger": {{
-    "needs_realtime_data": true,
-    "preliminary_assessment": "基于事件性质的波动预判"
+    "passed": true或false,
+    "gap_chase_risk": "low / medium / high（基于实际盘前涨幅）",
+    "volume_confirmation": "confirmed / weak / no_data（基于实际成交量）",
+    "suggested_signal": "BUY_ON_VWAP_HOLD / WAIT_FOR_PULLBACK / WATCH_ONLY / WATCH_SYMPATHY / AVOID",
+    "entry_rule": "具体入场条件",
+    "stop_loss_rule": "止损规则",
+    "preliminary_assessment": "step6综合判断"
   }},
 
   "final_verdict": {{
@@ -247,14 +257,17 @@ LEVEL3_USER_TEMPLATE = """## 事件信息
     "steps_passed": 通过了几步(数字),
     "composite_score": 0到100,
     "price_move_estimate": "+30%~+50% 或 -20%~-40% 等",
-    "action_suggestion": "对投资者的具体建议"
+    "trade_signal": "BUY_ON_VWAP_HOLD / WAIT_FOR_PULLBACK / WATCH_ONLY / WATCH_SYMPATHY / AVOID",
+    "position_size": "large / medium / small / none",
+    "action_suggestion": "对投资者的具体建议（中文）"
   }},
 
   "detailed_analysis": {{
     "direct_impact": "对公司股价的直接影响分析",
-    "pipeline_impact": "对公司管线和长期价值的影响",
+    "pipeline_impact": "对公司管线/产品线的影响",
     "competitive_landscape": "对同赛道竞品公司的影响",
     "revenue_impact": "对营收预期的影响",
+    "sympathy_tickers": ["可能联动上涨的股票代码"],
     "risk_factors": ["风险因素1", "风险因素2"]
   }},
   "related_tickers": ["相关股票代码1", "相关股票代码2"],
@@ -385,6 +398,45 @@ class NewsAnalyzer:
                     analysis.summary_cn = level3.get("summary_cn", analysis.summary_cn)
                     analysis.related_tickers = level3.get("related_tickers")
                     analysis.key_dates = level3.get("key_dates_to_watch")
+
+                    # ── 评分 + 信号生成 ──────────────────────────────────────
+                    mkt_ctx = level3.get("_market_context", {})
+                    l3_step6 = level3.get("step6_trading_trigger", {})
+
+                    from app.services.event_scorer import score_analysis
+                    from app.services.signal_generator import generate_trade_signal
+
+                    scores = score_analysis(
+                        category=level1.get("category", "general"),
+                        sentiment=level3.get("sentiment", "neutral"),
+                        confidence=float(level3.get("confidence", 0.5)),
+                        impact_level="high",
+                        event_strength=level1.get("event_strength"),
+                        l3_composite_score=verdict.get("composite_score"),
+                        market_context=mkt_ctx,
+                    )
+
+                    trade_signal = generate_trade_signal(
+                        event_score=scores["event_score"],
+                        market_score=scores["market_score"],
+                        risk_score=scores["risk_score"],
+                        final_score=scores["final_score"],
+                        premarket_gap_pct=mkt_ctx.get("premarket_gap_pct"),
+                        rel_volume=mkt_ctx.get("rel_volume"),
+                        qqq_change_pct=mkt_ctx.get("qqq_change_pct"),
+                        spy_change_pct=mkt_ctx.get("spy_change_pct"),
+                        ticker=company.ticker,
+                        l3_suggested_signal=l3_step6.get("suggested_signal")
+                            or verdict.get("trade_signal"),
+                    )
+
+                    logger.info(
+                        f"[Signal] {company.ticker} | "
+                        f"event={scores['event_score']} mkt={scores['market_score']} "
+                        f"risk={scores['risk_score']} final={scores['final_score']} | "
+                        f"{trade_signal['signal']}"
+                    )
+
                     analysis.detailed_analysis = {
                         **l1_meta,
                         "step1_company": level3.get("step1_company"),
@@ -395,6 +447,9 @@ class NewsAnalyzer:
                         "step6_trading_trigger": level3.get("step6_trading_trigger"),
                         "final_verdict": verdict,
                         "detailed_analysis": level3.get("detailed_analysis"),
+                        "market_context": mkt_ctx,   # 行情快照
+                        "scores": scores,             # 四维评分
+                        "trade_signal": trade_signal, # 交易信号
                     }
 
             # 如果 L1 判定不通过且是 LOW，只保存基础数据
@@ -409,6 +464,7 @@ class NewsAnalyzer:
             if analysis.impact_level == "high":
                 try:
                     from app.services.notifier import notify_high_impact
+                    da = analysis.detailed_analysis or {}
                     await notify_high_impact({
                         "ticker": company.ticker,
                         "company_name": company.name,
@@ -418,9 +474,13 @@ class NewsAnalyzer:
                         "impact_level": analysis.impact_level,
                         "impact_duration": analysis.impact_duration,
                         "summary_cn": analysis.summary_cn,
-                        "detailed_analysis": analysis.detailed_analysis,
+                        "detailed_analysis": da,
                         "related_tickers": analysis.related_tickers,
                         "key_dates": analysis.key_dates,
+                        # 新增：交易信号和评分
+                        "trade_signal": da.get("trade_signal"),
+                        "scores": da.get("scores"),
+                        "market_context": da.get("market_context"),
                     })
                 except Exception as e:
                     logger.warning(f"微信推送失败（不影响分析）: {e}")
@@ -591,10 +651,23 @@ class NewsAnalyzer:
     async def _level3_deep_analysis(
         self, news: News, company, level1: dict
     ) -> Optional[dict]:
-        """GPT-4o 深度分析 — 六步框架全评估"""
+        """GPT-4o 深度分析 — 六步框架全评估（注入真实行情数据）"""
         if not self.openai_client:
             logger.warning("L3 缺少 OpenAI API Key")
             return None
+
+        # ── 获取实时行情上下文（非阻塞，出错降级为空数据）──────────────────────
+        from app.services.market_context import (
+            get_market_context,
+            format_market_context_for_prompt,
+        )
+        try:
+            mkt_ctx = await get_market_context(company.ticker)
+        except Exception as e:
+            logger.warning(f"[L3] {company.ticker} 行情上下文获取失败（继续分析）: {e}")
+            mkt_ctx = {"has_data": False}
+
+        market_context_section = format_market_context_for_prompt(mkt_ctx, company.ticker)
 
         user_msg = LEVEL3_USER_TEMPLATE.format(
             ticker=company.ticker,
@@ -610,6 +683,7 @@ class NewsAnalyzer:
             company_type=level1.get("company_type", ""),
             event_strength=level1.get("event_strength", ""),
             summary_cn=level1.get("summary_cn", ""),
+            market_context_section=market_context_section,
         )
 
         try:
@@ -621,9 +695,12 @@ class NewsAnalyzer:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.3,
-                max_tokens=2500,
+                max_tokens=2800,
             )
-            return json.loads(response.choices[0].message.content)
+            result = json.loads(response.choices[0].message.content)
+            # 将行情快照附加到结果中，便于前端展示和回测
+            result["_market_context"] = mkt_ctx
+            return result
 
         except json.JSONDecodeError as e:
             logger.error(f"L3 JSON 解析失败: {e}")

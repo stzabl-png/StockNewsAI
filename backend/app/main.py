@@ -57,10 +57,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS 中间件（开发阶段允许所有来源）
+# CORS 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://quantnews.org",
+        "https://www.quantnews.org",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -74,6 +80,7 @@ from app.api.scheduler import router as scheduler_router
 from app.api.notify import router as notify_router
 from app.api.sectors import router as sectors_router
 from app.api.market import router as market_router
+from app.api.signals import router as signals_router
 
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
@@ -82,6 +89,7 @@ app.include_router(scheduler_router, prefix="/api")
 app.include_router(notify_router, prefix="/api")
 app.include_router(sectors_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
+app.include_router(signals_router, prefix="/api")
 
 # ---- 前端静态文件 ----
 import os
