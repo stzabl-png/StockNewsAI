@@ -4,10 +4,9 @@
 - 输出 trend_score (0-100) 和交易建议
 """
 import logging
+import statistics
 from datetime import date, timedelta
 from typing import Optional
-
-import numpy as np
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,7 +80,7 @@ class TrendAnalyzer:
     def _ma(closes: list[float], n: int) -> Optional[float]:
         if len(closes) < n:
             return None
-        return float(np.mean(closes[-n:]))
+        return sum(closes[-n:]) / n
 
     @staticmethod
     def _detect_higher_high_low(highs: list[float], lows: list[float], window: int = 10) -> dict:
@@ -116,7 +115,7 @@ class TrendAnalyzer:
 
         recent_vol = volumes[-window:]
         recent_cls = closes[-window:]
-        avg_vol = float(np.mean(volumes[-window:])) if recent_vol else 1
+        avg_vol = sum(volumes[-window:]) / window if recent_vol else 1
 
         up_vols, down_vols = [], []
         for i in range(1, len(recent_cls)):
@@ -125,8 +124,8 @@ class TrendAnalyzer:
             elif recent_cls[i] < recent_cls[i - 1]:
                 down_vols.append(recent_vol[i])
 
-        up_avg   = float(np.mean(up_vols))   if up_vols   else 0
-        down_avg = float(np.mean(down_vols)) if down_vols else 0
+        up_avg   = sum(up_vols)   / len(up_vols)   if up_vols   else 0
+        down_avg = sum(down_vols) / len(down_vols) if down_vols else 0
 
         # 上涨日量 > 下跌日量 = 良好量价确认
         if up_avg > down_avg * 1.2:
