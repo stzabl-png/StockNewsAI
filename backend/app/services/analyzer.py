@@ -601,9 +601,10 @@ class NewsAnalyzer:
             logger.error(f"分析新闻失败: {err_str[:200]}")
             raise RuntimeError(err_str)
 
-    async def analyze_batch(self, redis=None, hours_back: int = 48) -> dict:
-        """批量分析未分析的新闻（默认只处理最近 hours_back 小时，避免处理海量旧数据）"""
+    async def analyze_batch(self, redis=None, hours_back: int = 48, concurrency: int = 8) -> dict:
+        """批量分析未分析的新闻（并发版，默认8并发）"""
         from datetime import datetime, timedelta, timezone
+        import asyncio
         since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
 
         result = await self.session.execute(
@@ -622,9 +623,9 @@ class NewsAnalyzer:
                 await redis.delete("analysis_progress")
             return {"total": 0, "analyzed": 0, "high_impact": 0, "errors": 0}
 
-        analyzed = 0
-        high_impact = 0
-        errors = 0
+        # 并发计数器（asyncio.Lock 保证安全）
+        lock = asyncio.Lock()
+        counters = {"analyzed": 0, "high_impact": 0, "errors": 0, "quota_exceeded": False}
 
         # 写入初始进度
         if redis:
@@ -637,57 +638,73 @@ class NewsAnalyzer:
                 "current": "",
             })
 
-        for i, news in enumerate(unanalyzed):
-            # ── 提前记录关键字段，避免异步 lazy-load 导致 MissingGreenlet ────────
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _analyze_one(news: News) -> None:
+            """单条新闻分析任务（并发安全）"""
             news_id = news.id
             ticker = news.company.ticker if news.company else "?"
             title_short = (news.title or "")[:40]
 
-            current_label = f"{ticker}: {title_short}"
-            if redis:
-                await redis.hset("analysis_progress", mapping={
-                    "completed": str(analyzed + errors),
-                    "high_impact": str(high_impact),
-                    "errors": str(errors),
-                    "current": current_label,
-                })
+            if counters["quota_exceeded"]:
+                return
 
-            try:
-                analysis = await self.analyze_news(news)
-                if analysis:
-                    analyzed += 1
-                    if analysis.impact_level == "high":
-                        high_impact += 1
-            except RuntimeError as e:
-                err_str = str(e)
-                if "OPENAI_QUOTA_EXCEEDED" in err_str:
-                    logger.error("[Analyzer] ❌ OpenAI 账户额度耗尽，停止分析批次。请充值后重试。")
-                    if redis:
-                        await redis.hset("analysis_progress", mapping={
-                            "status": "quota_exceeded",
-                            "current": "OpenAI 额度耗尽，请充值",
-                        })
-                    break  # 立即停止，不继续浪费重试
-                logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 分析失败: {err_str[:150]}")
-                errors += 1
-            except Exception as e:
-                logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 未知错误: {e}")
-                errors += 1
+            async with sem:
+                if counters["quota_exceeded"]:
+                    return
+                try:
+                    analysis = await self.analyze_news(news)
+                    async with lock:
+                        if analysis:
+                            counters["analyzed"] += 1
+                            if analysis.impact_level == "high":
+                                counters["high_impact"] += 1
+                        completed = counters["analyzed"] + counters["errors"]
+                        if redis:
+                            await redis.hset("analysis_progress", mapping={
+                                "completed": str(completed),
+                                "high_impact": str(counters["high_impact"]),
+                                "errors": str(counters["errors"]),
+                                "current": f"{ticker}: {title_short}",
+                            })
+                except RuntimeError as e:
+                    err_str = str(e)
+                    if "OPENAI_QUOTA_EXCEEDED" in err_str:
+                        async with lock:
+                            counters["quota_exceeded"] = True
+                        logger.error("[Analyzer] ❌ OpenAI 账户额度耗尽，停止分析批次。")
+                        if redis:
+                            await redis.hset("analysis_progress", mapping={
+                                "status": "quota_exceeded",
+                                "current": "OpenAI 额度耗尽，请充值",
+                            })
+                        return
+                    logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 分析失败: {err_str[:150]}")
+                    async with lock:
+                        counters["errors"] += 1
+                except Exception as e:
+                    logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 未知错误: {e}")
+                    async with lock:
+                        counters["errors"] += 1
+
+        # 并发执行所有任务
+        logger.info(f"[Analyzer] 🚀 并发分析启动: {total} 条，{concurrency} 并发")
+        await asyncio.gather(*[_analyze_one(news) for news in unanalyzed])
 
         # 标记完成
         if redis:
             await redis.hset("analysis_progress", mapping={
                 "status": "done",
-                "completed": str(analyzed + errors),
-                "high_impact": str(high_impact),
-                "errors": str(errors),
+                "completed": str(counters["analyzed"] + counters["errors"]),
+                "high_impact": str(counters["high_impact"]),
+                "errors": str(counters["errors"]),
                 "current": "",
             })
 
         return {
             "total": total,
-            "analyzed": analyzed,
-            "high_impact": high_impact,
+            "analyzed": counters["analyzed"],
+            "high_impact": counters["high_impact"],
             "errors": errors,
         }
 
@@ -911,15 +928,15 @@ def _enforce_signal_rules(trade_signal: dict, market: dict) -> dict:
 #  后台分析任务
 # =====================================================
 
-async def run_analysis_background(hours_back: int = 48):
-    """后台任务入口 — 分析最近 hours_back 小时内未处理的新闻（带进度追踪）"""
+async def run_analysis_background(hours_back: int = 48, concurrency: int = 8):
+    """后台任务入口 — 分析最近 hours_back 小时内未处理的新闻（带进度追踪，并发）"""
     import redis.asyncio as aioredis
-    logger.info(f"[Analyzer] 后台分析任务启动（最近 {hours_back}h）...")
+    logger.info(f"[Analyzer] 后台分析任务启动（最近 {hours_back}h，{concurrency} 并发）...")
     redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     try:
         async with async_session() as session:
             analyzer = NewsAnalyzer(session=session)
-            result = await analyzer.analyze_batch(redis=redis, hours_back=hours_back)
+            result = await analyzer.analyze_batch(redis=redis, hours_back=hours_back, concurrency=concurrency)
             logger.info(
                 f"[Analyzer] 后台分析完成: "
                 f"总计 {result['total']}, 已分析 {result['analyzed']}, "

@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # ---------- LLM 模型配置（全量切换为 OpenAI）----------
-    OPENAI_MODEL_L1: str = "gpt-4o-mini"          # L1 初筛（替代 Gemini Flash）
+    OPENAI_MODEL_L1: str = "gpt-4o-mini"          # L1 初筛（全量）
     OPENAI_MODEL_L2: str = "gpt-4o-mini"          # L2 中级分析
-    OPENAI_MODEL_L3: str = "gpt-4o-2024-08-06"    # L3 深度分析（替代 Gemini Pro）
+    OPENAI_MODEL_L3: str = "gpt-4.1"              # L3 深度分析（gpt-4.1: 速度快2x，成本低于gpt-4o）
 
     model_config = {
         "env_file": ".env",

@@ -164,21 +164,23 @@ async def analyze_batch(
     background_tasks: BackgroundTasks,
     sync: bool = Query(False, description="是否同步执行（等待分析完成再返回）"),
     hours_back: int = Query(48, ge=1, le=8760, description="只分析最近 N 小时内的新闻（默认48h）"),
+    concurrency: int = Query(8, ge=1, le=20, description="并发数（默认8，可增加加速，建议≤15）"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     批量分析未分析的新闻
     - sync=false (默认): 后台异步执行，立即返回
     - sync=true: 同步执行，等待全部分析完成
-    - hours_back: 只分析最近 N 小时内的新闻（默认48h，避免处理历史积压）
+    - hours_back: 只分析最近 N 小时内的新闻（默认48h）
+    - concurrency: 并发数（默认8，增加可加速，但会消耗更多 OpenAI API 配额）
     """
     if sync:
         analyzer = NewsAnalyzer(session=db)
-        result = await analyzer.analyze_batch(hours_back=hours_back)
+        result = await analyzer.analyze_batch(hours_back=hours_back, concurrency=concurrency)
         return AnalyzeBatchResult(**result)
     else:
         async def _bg():
-            await run_analysis_background(hours_back=hours_back)
+            await run_analysis_background(hours_back=hours_back, concurrency=concurrency)
         background_tasks.add_task(_bg)
         return AnalyzeBatchResult(total=-1, analyzed=0, high_impact=0, errors=0)
 
