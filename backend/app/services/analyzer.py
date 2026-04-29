@@ -588,9 +588,13 @@ class NewsAnalyzer:
             return analysis
 
         except Exception as e:
-            logger.error(f"分析新闻 {news.id} 失败: {e}")
+            err_str = str(e)
             await self.session.rollback()
-            raise RuntimeError(str(e))
+            # OpenAI 账户额度耗尽 → 立即上抛，停止整个 batch
+            if "insufficient_quota" in err_str:
+                raise RuntimeError("OPENAI_QUOTA_EXCEEDED: " + err_str)
+            logger.error(f"分析新闻失败: {err_str[:200]}")
+            raise RuntimeError(err_str)
 
     async def analyze_batch(self, redis=None) -> dict:
         """批量分析所有未分析的新闻（支持进度追踪）"""
@@ -625,8 +629,12 @@ class NewsAnalyzer:
             })
 
         for i, news in enumerate(unanalyzed):
-            # 更新进度
-            current_label = f"{news.company.ticker}: {news.title[:40]}" if news.company else news.title[:50]
+            # ── 提前记录关键字段，避免异步 lazy-load 导致 MissingGreenlet ────────
+            news_id = news.id
+            ticker = news.company.ticker if news.company else "?"
+            title_short = (news.title or "")[:40]
+
+            current_label = f"{ticker}: {title_short}"
             if redis:
                 await redis.hset("analysis_progress", mapping={
                     "completed": str(analyzed + errors),
@@ -641,8 +649,20 @@ class NewsAnalyzer:
                     analyzed += 1
                     if analysis.impact_level == "high":
                         high_impact += 1
+            except RuntimeError as e:
+                err_str = str(e)
+                if "OPENAI_QUOTA_EXCEEDED" in err_str:
+                    logger.error("[Analyzer] ❌ OpenAI 账户额度耗尽，停止分析批次。请充值后重试。")
+                    if redis:
+                        await redis.hset("analysis_progress", mapping={
+                            "status": "quota_exceeded",
+                            "current": "OpenAI 额度耗尽，请充值",
+                        })
+                    break  # 立即停止，不继续浪费重试
+                logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 分析失败: {err_str[:150]}")
+                errors += 1
             except Exception as e:
-                logger.error(f"批量分析中新闻 {news.id} 失败: {e}")
+                logger.error(f"[Analyzer] 新闻 {news_id} ({ticker}) 未知错误: {e}")
                 errors += 1
 
         # 标记完成
