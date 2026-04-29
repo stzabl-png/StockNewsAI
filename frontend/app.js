@@ -143,6 +143,7 @@ function loadPageData(page) {
         case 'backtest':  loadBacktestPage(); break;
         case 'watchlist': loadWatchlist(); break;
         case 'system':    loadSystem(); break;
+        case 'trend':     loadTrendScanner(); break;
     }
 }
 
@@ -1855,5 +1856,138 @@ async function loadBacktestPage() {
 
     } catch (e) {
         container.innerHTML = `<div class="loading-placeholder" style="color:var(--bearish)">加载失败: ${e.message}</div>`;
+    }
+}
+
+// =====================================================
+//  趋势 Scanner
+// =====================================================
+let _trendData = [];
+let _trendStageFilter = '';
+
+async function loadTrendScanner() {
+    const list = document.getElementById('trend-list');
+    const minScore = document.getElementById('trend-min-score')?.value || 50;
+    if (!list) return;
+    list.innerHTML = '<div class="loading-placeholder">加载趋势数据...</div>';
+
+    try {
+        const data = await API.request(`/api/trend/scanner?min_score=${minScore}&limit=60`);
+        _trendData = data.results || [];
+
+        // 大盘上下文
+        const ctxEl = document.getElementById('trend-market-ctx');
+        if (ctxEl) {
+            const q = data.qqq_3m_return;
+            const sign = q >= 0 ? '+' : '';
+            const color = q >= 0 ? '#10b981' : '#ef4444';
+            ctxEl.innerHTML = q !== null ? `
+                <span style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:12px;">
+                    📊 <b>QQQ 3月</b>: <span style="color:${color}">${sign}${q}%</span>
+                </span>
+                <span style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:12px;color:var(--text-muted)">
+                    共找到 <b style="color:var(--text-primary)">${data.count}</b> 条趋势股
+                </span>` : '';
+        }
+
+        renderTrendList();
+    } catch (e) {
+        list.innerHTML = `<div class="loading-placeholder" style="color:var(--bearish)">加载失败: ${e.message}<br><small>请先点击「更新数据」拉取历史价格</small></div>`;
+    }
+}
+
+function renderTrendList() {
+    const list = document.getElementById('trend-list');
+    if (!list) return;
+
+    let items = _trendData;
+    if (_trendStageFilter) {
+        items = items.filter(r => r.trend_stage === _trendStageFilter);
+    }
+
+    if (items.length === 0) {
+        list.innerHTML = emptyState('📈', '暂无符合条件的趋势股，尝试降低趋势分门槛');
+        return;
+    }
+
+    list.innerHTML = items.map(r => renderTrendCard(r)).join('');
+}
+
+function renderTrendCard(r) {
+    const stageLabel = {
+        'strong_uptrend':   '🚀 强趋势',
+        'moderate_uptrend': '📈 中趋势',
+        'weak_uptrend':     '〰️ 弱趋势',
+        'sideways':         '➡️ 横盘',
+        'downtrend':        '📉 下降趋势',
+    }[r.trend_stage] || r.trend_stage;
+
+    const scoreColor = r.trend_score >= 75 ? '#10b981'
+                     : r.trend_score >= 60 ? '#f59e0b'
+                     : r.trend_score >= 45 ? '#6366f1' : '#6b7280';
+
+    const maStatus = {
+        'price_above_20_50_200': '均线全排列 ✔',
+        'price_above_50_200':    'MA50>200 ✔',
+        'price_above_200_only':  '仅MA200上方',
+        'below_ma200':           '跌破MA200 ⚠️',
+    }[r.moving_average_status] || r.moving_average_status;
+
+    const volIcon = r.volume_confirmation === 'positive' ? '✅ 量价健康'
+                  : r.volume_confirmation === 'negative' ? '⚠️ 量价异常' : '➖ 中性';
+
+    const hhIcon = (r.higher_high && r.higher_low) ? '↑HH+HL ✔'
+                 : r.higher_high ? '↑HH' : r.higher_low ? '↑HL' : '—';
+
+    const entryMap = {
+        'buy_on_vwap_hold_or_ma20_hold': '开盘VWAP确认/回踩MA20',
+        'wait_for_pullback_to_ma20':     '等回踩MA20',
+        'wait_for_vwap_hold':            '等VWAP确认',
+        'wait_for_confirmation':         '等待确认',
+        'avoid_no_trend':                '暂不操作',
+    }[r.best_entry] || r.best_entry;
+
+    const fmt = (v) => v !== null && v !== undefined ? `${v >= 0 ? '+' : ''}${v}%` : '--';
+    const retColor = (v) => v !== null && v >= 0 ? '#10b981' : '#ef4444';
+    const distColor = r.dist_52w_high_pct !== null && r.dist_52w_high_pct >= -10 ? '#10b981' : '#f59e0b';
+
+    return `
+    <div class="scanner-card" onclick="openChartModal('${r.ticker}','')">
+        <div class="sc-left">
+            <div class="sc-ticker">${r.ticker}</div>
+            <div class="sc-signal" style="background:${scoreColor}20; color:${scoreColor}; border:1px solid ${scoreColor}40; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:600; white-space:nowrap;">${stageLabel}</div>
+        </div>
+        <div class="sc-center">
+            <div class="sc-title">${maStatus} &nbsp; ${hhIcon} &nbsp; ${volIcon}</div>
+            <div class="sc-meta" style="display:flex; gap:14px; flex-wrap:wrap; margin-top:4px;">
+                <span style="font-size:11px; color:var(--text-muted)">1m: <b style="color:${retColor(r.ret_1m)}">${fmt(r.ret_1m)}</b></span>
+                <span style="font-size:11px; color:var(--text-muted)">3m: <b style="color:${retColor(r.ret_3m)}">${fmt(r.ret_3m)}</b></span>
+                <span style="font-size:11px; color:var(--text-muted)">距52w高: <b style="color:${distColor}">${fmt(r.dist_52w_high_pct)}</b></span>
+                <span style="font-size:11px; color:var(--text-muted)">买点: <b style="color:var(--text-primary)">${entryMap}</b></span>
+            </div>
+        </div>
+        <div class="sc-right" style="text-align:center; min-width:52px;">
+            <div style="font-size:26px; font-weight:700; color:${scoreColor}; line-height:1;">${r.trend_score}</div>
+            <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">趋势分</div>
+        </div>
+    </div>`;
+}
+
+function filterTrend(btn, stage) {
+    document.querySelectorAll('#page-trend .sfil').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _trendStageFilter = stage;
+    renderTrendList();
+}
+
+function refreshTrend() { loadTrendScanner(); }
+
+async function fetchTrendHistory() {
+    showToast('历史数据拉取已启动，约需 10 分钟，请稍后刷新', 'info');
+    try {
+        await API.request('/api/trend/fetch-history', { method: 'POST' });
+        showToast('后台拉取中，10分钟后点击刷新查看数据', 'success');
+    } catch(e) {
+        showToast('启动失败: ' + e.message, 'error');
     }
 }
