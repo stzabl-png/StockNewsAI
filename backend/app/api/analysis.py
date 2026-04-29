@@ -189,26 +189,24 @@ async def analyze_batch(
 async def reanalyze_all(
     background_tasks: BackgroundTasks,
     sync: bool = Query(False, description="是否同步执行"),
+    hours_back: int = Query(720, ge=1, le=87600, description="补分析最近N小时内的新闻（默认30天=720h）"),
+    concurrency: int = Query(5, ge=1, le=15, description="并发数"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    清空所有旧分析结果，用最新规则重新分析全部新闻
-    ⚠️ 这会删除所有现有分析！
+    补分析所有未分析的新闻（不删除已有结果，可随时重试）
+    - hours_back=720  → 最近30天（默认）
+    - hours_back=8760 → 最近1年
     """
-    from sqlalchemy import delete
-
-    # 删除所有分析记录
-    deleted = await db.execute(delete(Analysis))
-    await db.commit()
-    count = deleted.rowcount
-
     if sync:
         analyzer = NewsAnalyzer(session=db)
-        result = await analyzer.analyze_batch()
+        result = await analyzer.analyze_batch(hours_back=hours_back, concurrency=concurrency)
         return AnalyzeBatchResult(**result)
     else:
-        background_tasks.add_task(run_analysis_background)
-        return AnalyzeBatchResult(total=count, analyzed=0, high_impact=0, errors=0)
+        async def _bg():
+            await run_analysis_background(hours_back=hours_back, concurrency=concurrency)
+        background_tasks.add_task(_bg)
+        return AnalyzeBatchResult(total=-1, analyzed=0, high_impact=0, errors=0)
 
 
 @router.post("/{news_id}", response_model=AnalysisResponse)

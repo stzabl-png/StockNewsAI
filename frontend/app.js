@@ -677,13 +677,13 @@ function formatMarketCap(cap) {
 // =====================================================================
 
 let _progressTimer = null;
+let _lastCompletedCount = -1;
 
 function _updateProgressWidget(p) {
     const widget = document.getElementById('analysis-progress-widget');
     if (!widget) return;
 
     const isRunning = p.status === 'running';
-    const isDone    = p.status === 'done' || p.total === 0;
     const isQuota   = p.status === 'quota_exceeded';
 
     if (!isRunning && !isQuota) {
@@ -695,7 +695,7 @@ function _updateProgressWidget(p) {
 
     const total     = parseInt(p.total) || 1;
     const completed = parseInt(p.completed) || 0;
-    const pct       = Math.min(100, Math.round((completed / total) * 100));
+    const pct       = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
 
     document.getElementById('apw-bar').style.width    = pct + '%';
     document.getElementById('apw-counts').textContent = `${completed} / ${total}  (${pct}%)`;
@@ -707,6 +707,8 @@ function _updateProgressWidget(p) {
 
     if (isQuota) {
         document.getElementById('apw-bar').style.background = 'linear-gradient(90deg,#ef4444,#f97316)';
+    } else {
+        document.getElementById('apw-bar').style.background = 'linear-gradient(90deg,#6366f1,#8b5cf6)';
     }
 }
 
@@ -716,15 +718,18 @@ async function pollAnalysisProgress() {
         _updateProgressWidget(p);
 
         if (p.status === 'running') {
-            // 每 3 秒刷新一次进度
+            // 每 2 秒刷新一次进度
             _progressTimer = setTimeout(async () => {
-                await pollAnalysisProgress();
-                // 每完成 20 条刷新一次列表
                 const completed = parseInt(p.completed) || 0;
-                if (completed > 0 && completed % 20 === 0) loadAnalysis();
-            }, 3000);
+                // 每完成20条刷新列表
+                if (completed > 0 && completed % 20 === 0 && completed !== _lastCompletedCount) {
+                    _lastCompletedCount = completed;
+                    loadAnalysis();
+                }
+                await pollAnalysisProgress();
+            }, 2000);
         } else {
-            // 完成 → 刷新列表 + 隐藏进度条
+            // 完成/quota → 隐藏进度条，刷新列表
             if (p.status === 'done') {
                 setTimeout(() => {
                     document.getElementById('analysis-progress-widget').style.display = 'none';
@@ -734,9 +739,34 @@ async function pollAnalysisProgress() {
             _progressTimer = null;
         }
     } catch (e) {
-        // 网络错误静默处理
+        // 网络错误3秒后重试
+        _progressTimer = setTimeout(pollAnalysisProgress, 3000);
     }
 }
+
+// 确保切换到分析页或重新触发时进度轮询在跑
+function ensureProgressPolling() {
+    if (!_progressTimer) {
+        pollAnalysisProgress();
+    }
+}
+
+async function reanalyzeAll() {
+    // 弹确认框
+    if (!confirm('将补分析最近30天内所有未分析的新闻（不删除已有分析）\n预计需要 20-60 分钟，确认继续？')) return;
+    try {
+        showToast('🚀 全量分析已启动（最近30天，5并发）...', 'info');
+        await API.request('/api/analysis/reanalyze-all?hours_back=720&concurrency=5', { method: 'POST' });
+        showToast('分析进行中，进度条将实时更新', 'success');
+        // 重置并启动进度轮询
+        _progressTimer = null;
+        _lastCompletedCount = -1;
+        ensureProgressPolling();
+    } catch(e) {
+        showToast('启动失败: ' + e.message, 'error');
+    }
+}
+
 
 async function loadAnalysis() {
     const ticker = document.getElementById('analysis-filter-ticker').value;
@@ -745,7 +775,7 @@ async function loadAnalysis() {
     const container = document.getElementById('analysis-list');
 
     // 自动启动进度轮询（如果没有在跑）
-    if (!_progressTimer) pollAnalysisProgress();
+    ensureProgressPolling();
 
     try {
         const analyses = await API.getAnalysis({ ticker, sentiment, impact_level, limit: 100 });
