@@ -369,13 +369,27 @@ class NewsAnalyzer:
 
     @property
     def openai_client(self) -> Optional[AsyncOpenAI]:
+        """L3 深度分析 client（30s 超时）"""
         if self._openai is None and settings.OPENAI_API_KEY:
             self._openai = AsyncOpenAI(
                 api_key=settings.OPENAI_API_KEY,
-                timeout=60.0,   # 60s 超时，防止单条卡住整个 batch
-                max_retries=1,  # 失败只重试1次
+                timeout=30.0,   # 30s 超时（之前60s太久，会阻塞并发槽）
+                max_retries=1,
             )
         return self._openai
+
+    @property
+    def openai_client_fast(self) -> Optional[AsyncOpenAI]:
+        """L1/L2 快速 client（10s 超时，gpt-4o-mini 很快）"""
+        if not hasattr(self, '_openai_fast') or self._openai_fast is None:
+            if settings.OPENAI_API_KEY:
+                self._openai_fast = AsyncOpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    timeout=10.0,   # mini 模型10s足够
+                    max_retries=1,
+                )
+        return getattr(self, '_openai_fast', None)
+
 
     def _ensure_gemini(self):
         pass  # Gemini disabled due to 429 quota block, using OpenAI instead
@@ -730,7 +744,7 @@ class NewsAnalyzer:
 
     async def _level1_screen(self, news: News, company) -> Optional[dict]:
         """GPT-4o-mini 初筛 — 全市场事件分类 + 公司分类 + 过滤"""
-        if not self.openai_client:
+        if not self.openai_client_fast:
             raise RuntimeError("L1 缺少 OpenAI API Key")
 
         user_msg = LEVEL1_USER_TEMPLATE.format(
@@ -745,7 +759,7 @@ class NewsAnalyzer:
         )
 
         try:
-            response = await self.openai_client.chat.completions.create(
+            response = await self.openai_client_fast.chat.completions.create(
                 model=settings.OPENAI_MODEL_L1,
                 messages=[
                     {"role": "system", "content": LEVEL1_SYSTEM_PROMPT},
@@ -772,7 +786,7 @@ class NewsAnalyzer:
         self, news: News, company, level1: dict
     ) -> Optional[dict]:
         """GPT-4o-mini 中级分析 — 七维评分体系（多行业全市场）"""
-        if not self.openai_client:
+        if not self.openai_client_fast:
             logger.warning("OpenAI API Key 未配置，跳过 L2")
             return None
 
@@ -789,7 +803,7 @@ class NewsAnalyzer:
         )
 
         try:
-            response = await self.openai_client.chat.completions.create(
+            response = await self.openai_client_fast.chat.completions.create(
                 model=settings.OPENAI_MODEL_L2,
                 messages=[
                     {"role": "system", "content": LEVEL2_SYSTEM_PROMPT},
