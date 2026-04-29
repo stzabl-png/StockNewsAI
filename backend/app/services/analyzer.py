@@ -640,12 +640,8 @@ class NewsAnalyzer:
 
         sem = asyncio.Semaphore(concurrency)
 
-        async def _analyze_one(news: News) -> None:
-            """单条新闻分析任务（并发安全）"""
-            news_id = news.id
-            ticker = news.company.ticker if news.company else "?"
-            title_short = (news.title or "")[:40]
-
+        async def _analyze_one(news_id: int, ticker: str, title_short: str) -> None:
+            """单条新闻分析任务 — 独立 session，并发安全"""
             if counters["quota_exceeded"]:
                 return
 
@@ -653,7 +649,19 @@ class NewsAnalyzer:
                 if counters["quota_exceeded"]:
                     return
                 try:
-                    analysis = await self.analyze_news(news)
+                    # 每个并发任务独立 session，避免共享 session 锁竞争
+                    async with async_session() as task_session:
+                        task_result = await task_session.execute(
+                            select(News)
+                            .where(News.id == news_id)
+                            .options(joinedload(News.company))
+                        )
+                        news_obj = task_result.unique().scalar_one_or_none()
+                        if not news_obj:
+                            return
+                        analyzer_task = NewsAnalyzer(session=task_session)
+                        analysis = await analyzer_task.analyze_news(news_obj)
+
                     async with lock:
                         if analysis:
                             counters["analyzed"] += 1
@@ -687,9 +695,17 @@ class NewsAnalyzer:
                     async with lock:
                         counters["errors"] += 1
 
-        # 并发执行所有任务
+        # 并发执行所有任务（预先提取字段，避免懒加载跨session问题）
         logger.info(f"[Analyzer] 🚀 并发分析启动: {total} 条，{concurrency} 并发")
-        await asyncio.gather(*[_analyze_one(news) for news in unanalyzed])
+        tasks = [
+            _analyze_one(
+                news_id=n.id,
+                ticker=n.company.ticker if n.company else "?",
+                title_short=(n.title or "")[:40],
+            )
+            for n in unanalyzed
+        ]
+        await asyncio.gather(*tasks)
 
         # 标记完成
         if redis:
