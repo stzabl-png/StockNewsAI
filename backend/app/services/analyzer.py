@@ -370,7 +370,11 @@ class NewsAnalyzer:
     @property
     def openai_client(self) -> Optional[AsyncOpenAI]:
         if self._openai is None and settings.OPENAI_API_KEY:
-            self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            self._openai = AsyncOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=60.0,   # 60s 超时，防止单条卡住整个 batch
+                max_retries=1,  # 失败只重试1次
+            )
         return self._openai
 
     def _ensure_gemini(self):
