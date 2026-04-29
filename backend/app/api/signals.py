@@ -80,10 +80,11 @@ def _extract_signal_summary(analysis: Analysis, news: News) -> dict:
 
 @router.get("/signals/today")
 async def get_today_signals(
-    min_final_score: int = Query(50, ge=0, le=100, description="最低综合分筛选"),
-    min_event_score: int = Query(60, ge=0, le=100, description="最低事件分筛选"),
-    limit: int = Query(20, ge=1, le=100, description="返回条数"),
+    min_final_score: int = Query(0, ge=0, le=100, description="最低综合分筛选（0=不过滤）"),
+    min_event_score: int = Query(0, ge=0, le=100, description="最低事件分筛选（0=不过滤）"),
+    limit: int = Query(50, ge=1, le=200, description="返回条数"),
     signal_filter: Optional[str] = Query(None, description="按信号类型筛选，如 BUY_ON_VWAP_HOLD"),
+    exclude_avoid: bool = Query(True, description="是否排除 AVOID 信号"),
 ):
     """
     返回最近24小时内所有 L3 高影响事件的交易信号，按综合分排序。
@@ -97,12 +98,14 @@ async def get_today_signals(
         result = await db.execute(
             select(Analysis, News)
             .join(News, Analysis.news_id == News.id)
-            .options(joinedload(Analysis.news))
+            .options(
+                joinedload(Analysis.news).joinedload(News.company)  # ← 必须同时加载 company
+            )
             .where(Analysis.level == 3)
             .where(Analysis.impact_level == "high")
             .where(Analysis.created_at >= since)
             .order_by(desc(Analysis.created_at))
-            .limit(200)  # 先拉多一点，再在内存中过滤排序
+            .limit(500)
         )
         rows = result.all()
 
@@ -114,12 +117,16 @@ async def get_today_signals(
             logger.warning(f"[Signals] 提取信号摘要失败 news_id={news.id}: {e}")
             continue
 
-        # 评分过滤
+        # AVOID 过滤
+        if exclude_avoid and summary.get("signal") == "AVOID":
+            continue
+
+        # 最低分过滤（final_score=None 的不过滤，让前端展示）
         final_score = summary.get("final_score")
         event_score = summary.get("event_score")
-        if final_score is not None and final_score < min_final_score:
+        if final_score is not None and min_final_score > 0 and final_score < min_final_score:
             continue
-        if event_score is not None and event_score < min_event_score:
+        if event_score is not None and min_event_score > 0 and event_score < min_event_score:
             continue
 
         # 信号类型过滤
